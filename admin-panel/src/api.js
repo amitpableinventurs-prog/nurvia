@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api/v1';
+// Without VITE_API_URL the API is on port 4000 of the machine that served the panel: localhost, or its
+// Wi-Fi address when the panel is opened from another device.
+const BASE = import.meta.env.VITE_API_URL ?? `${location.protocol}//${location.hostname}:4000/api/v1`;
 
 // Tokens live in sessionStorage so a closed tab ends the admin session.
 const store = {

@@ -71,7 +71,10 @@ export function createApp() {
     const swaggerOptions = { url: '/api-docs.json', persistAuthorization: true, filter: true, deepLinking: true };
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(null, { swaggerOptions }));
   }
-  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+  // Outside production the API is also opened over plain HTTP on the machine's Wi-Fi address, where
+  // upgrade-insecure-requests would send the panels' own scripts to https and break them.
+  const csp = { directives: { upgradeInsecureRequests: env.isProd ? [] : null } };
+  app.use(helmet({ contentSecurityPolicy: csp, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cors({ origin: env.corsOrigins, allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant', 'X-Request-Id'] }));
   if (env.nodeEnv !== 'test') app.use(morgan(env.isProd ? 'combined' : 'dev'));
 
