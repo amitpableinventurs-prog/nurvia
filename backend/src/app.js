@@ -4,6 +4,8 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import mongoose from 'mongoose';
 import swaggerUi from 'swagger-ui-express';
 // Must load before the route modules below register their routers.
@@ -42,6 +44,13 @@ import { resolveTenant } from './modules/tenants/resolve-tenant.js';
 import userRoutes from './modules/users/user.routes.js';
 import vendorPanelRoutes from './modules/vendors/vendor-panel.routes.js';
 import vendorRoutes from './modules/vendors/vendor.routes.js';
+
+// Production builds of the panels (`npm run build` at the repo root) are served from the API's own
+// origin, so they call it at /api/v1 with no CORS. A panel that has not been built is skipped.
+const panels = {
+  '/admin': path.resolve(import.meta.dirname, '../../admin-panel/dist'),
+  '/vendor': path.resolve(import.meta.dirname, '../../vendor-panel/dist'),
+};
 
 export function createApp() {
   const app = express();
@@ -118,6 +127,16 @@ export function createApp() {
   api.use('/admin', adminRoutes);
 
   app.use('/api/v1', api);
+
+  for (const [mount, dir] of Object.entries(panels)) {
+    if (!fs.existsSync(path.join(dir, 'index.html'))) continue;
+    // Bundles have hashed names, so they can be cached for good; index.html is revalidated on every load.
+    app.use(mount, express.static(dir, { index: false, maxAge: '1y', immutable: true }));
+    // Client-side routes get the app shell; a missing file (an old bundle after a deploy) stays a 404.
+    app.get(`${mount}{/*route}`, (req, res, next) => (path.extname(req.path) ? next() : res.sendFile(path.join(dir, 'index.html'))));
+  }
+  if (fs.existsSync(path.join(panels['/admin'], 'index.html'))) app.get('/', (_req, res) => res.redirect('/admin/'));
+
   app.use(notFoundHandler);
   app.use(errorHandler);
   return app;

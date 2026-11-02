@@ -43,6 +43,16 @@ API docs (Swagger) are at http://localhost:4000/api-docs outside production, gen
 
 Tests: `cd backend && npm test`. They start their own in-memory MongoDB and run the main flows end to end: OTP login, tenant isolation, the KYC → approval → geo discovery path, booking clashes, payment and refund, reviews, moderation, permissions and announcements.
 
+## Deploy as one Node app
+
+The root `package.json` builds and runs the API with both panels on a single origin, for a host that runs one Node app per domain (Hostinger Node.js hosting, a VPS with PM2, and so on):
+
+- build command `npm run build`, start command `npm start` (or entry file `backend/src/server.js`), Node 22 or later
+- the API at `/api/v1`, the admin panel at `/admin/`, the partner panel at `/vendor/`; `/` redirects to the admin panel
+- the panels call the API at `/api/v1` on the same origin (`.env.production` in each panel), so `CORS_ORIGINS` only needs the site's own URL
+
+Set the backend variables from `backend/.env.example` in the host's environment settings. `MONGODB_URI` must point at a database the host can reach (Atlas, for shared hosting), `PUBLIC_BASE_URL` at the site's URL, and `TRUST_PROXY=1` when it runs behind the host's proxy. Leave `PORT` to the host if it assigns one. Run `npm run seed --prefix backend` once against the new database to create the first super admin.
+
 ## Architecture
 
 - **Modular, API-first.** Each domain lives in `backend/src/modules/<name>/` and owns its model and routes: auth, users, pets, vendors, bookings, payments, community-dogs, adoption, community, reviews, reports, notifications, files, ai, admin and tenants, plus nfc, sos, shop (with returns and reviews), operations (vendor workspace: staff, CRM, appointments, visit records), finance (seller onboarding, commission, settlements), loyalty and plans.

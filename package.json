@@ -1,0 +1,13 @@
+{
+  "name": "nurvia",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deploys the API and both panels as one Node app: /api/v1, /admin and /vendor on one origin",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm ci --prefix backend --omit=dev && npm ci --prefix admin-panel --include=dev && npm ci --prefix vendor-panel --include=dev && npm run build --prefix admin-panel -- --base=/admin/ && npm run build --prefix vendor-panel -- --base=/vendor/",
+    "start": "npm start --prefix backend"
+  }
+}
