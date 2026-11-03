@@ -222,29 +222,46 @@ router.post('/shop/orders/:id/cancel', requirePermission(P.ORDERS_MANAGE), valid
 
 // ---- Coupons ----
 
+// Coupons need the customer to enter the code; automatic discounts (`autoApply`) are applied at
+// checkout without one. An order gets one of them: a valid entered code, else the best automatic one.
+// null clears an optional field (no cap, no start or end date).
 const couponBody = {
-  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{3,20}$/),
-  description: z.string().max(200).optional(),
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{3,20}$/, 'Use 3 to 20 letters and digits'),
+  description: z.string().trim().max(200).nullable().optional(),
   type: z.enum(['percent', 'flat']),
   value: z.number().int().min(1),
   minOrderPaise: z.number().int().min(0).optional(),
-  maxDiscountPaise: z.number().int().min(1).optional(),
+  maxDiscountPaise: z.number().int().min(1).nullable().optional(),
+  autoApply: z.boolean().optional(),
   active: z.boolean().optional(),
-  expiresAt: z.coerce.date().optional(),
+  startsAt: z.coerce.date().nullable().optional(),
+  expiresAt: z.coerce.date().nullable().optional(),
 };
 const checkCoupon = (c) => {
   if (c.type === 'percent' && c.value > 90) throw badRequest('A percentage coupon can be at most 90%');
+  if (c.startsAt && c.expiresAt && c.expiresAt <= c.startsAt) throw badRequest('The end date must be after the start date');
 };
+const unsetNulls = (body) => Object.fromEntries(Object.entries(body).map(([k, v]) => [k, v ?? undefined]));
+
+// Orders that used each code (cancelled and unpaid ones left out) and the discount they got.
+async function couponUsage() {
+  const rows = await ShopOrder.aggregate([
+    { $match: { 'pricing.couponCode': { $type: 'string' }, status: { $nin: ['cancelled', 'pending_payment'] } } },
+    { $group: { _id: '$pricing.couponCode', orders: { $sum: 1 }, discountPaise: { $sum: '$pricing.discountPaise' } } },
+  ]);
+  return new Map(rows.map((r) => [r._id, { orders: r.orders, discountPaise: r.discountPaise }]));
+}
 
 router.get('/coupons', requirePermission(P.MARKETING_MANAGE), async (_req, res) => {
-  res.json(await Coupon.find().sort({ active: -1, createdAt: -1 }).lean());
+  const [coupons, usage] = await Promise.all([Coupon.find().sort({ active: -1, createdAt: -1 }).lean(), couponUsage()]);
+  res.json(coupons.map((c) => ({ ...c, usage: usage.get(c.code) ?? { orders: 0, discountPaise: 0 } })));
 });
 
 router.post('/coupons', requirePermission(P.MARKETING_MANAGE), validate({ body: couponBody }), async (req, res) => {
   checkCoupon(req.valid.body);
   if (await Coupon.exists({ code: req.valid.body.code })) throw conflict('That code is already in use');
-  const coupon = await Coupon.create(req.valid.body);
-  await audit(req, 'coupon.create', { type: 'coupon', id: coupon._id }, { meta: { code: coupon.code } });
+  const coupon = await Coupon.create(unsetNulls(req.valid.body));
+  await audit(req, 'coupon.create', { type: 'coupon', id: coupon._id }, { meta: { code: coupon.code, autoApply: coupon.autoApply } });
   res.status(201).json(coupon);
 });
 
@@ -255,12 +272,23 @@ router.patch(
   async (req, res) => {
     const coupon = await Coupon.findById(req.valid.params.id);
     if (!coupon) throw notFound('Coupon');
-    coupon.set(req.valid.body);
+    coupon.set(unsetNulls(req.valid.body));
     checkCoupon(coupon);
     await coupon.save();
     await audit(req, 'coupon.update', { type: 'coupon', id: coupon._id }, { meta: { fields: Object.keys(req.valid.body) } });
     res.json(coupon);
   },
 );
+
+// Only a code no order has used can be deleted, so past orders keep pointing at a real offer.
+// A used one is switched off instead.
+router.delete('/coupons/:id', requirePermission(P.MARKETING_MANAGE), validate(), async (req, res) => {
+  const coupon = await Coupon.findById(req.valid.params.id);
+  if (!coupon) throw notFound('Coupon');
+  if (await ShopOrder.exists({ 'pricing.couponCode': coupon.code })) throw conflict('Orders have used this code. Switch it off instead.');
+  await coupon.deleteOne();
+  await audit(req, 'coupon.delete', { type: 'coupon', id: coupon._id }, { meta: { code: coupon.code } });
+  res.status(204).end();
+});
 
 export default router;

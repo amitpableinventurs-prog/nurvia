@@ -1,4 +1,4 @@
-import { Activity, CalendarHeart, LayoutDashboard, MapPinned, LogOut, Megaphone, Moon, ScrollText, Shapes, ShieldCheck, Siren, Store, Sun, SunMoon } from 'lucide-react';
+import { Activity, CalendarHeart, GalleryHorizontal, LayoutDashboard, MapPinned, LogOut, Megaphone, Moon, ScrollText, Shapes, ShieldCheck, Siren, Store, Sun, SunMoon, TicketPercent } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { NurviaMark } from './icons.jsx';
@@ -9,9 +9,11 @@ import { ErrorNote, useApi } from './ui.jsx';
 // Screens are downloaded on first visit, so opening the panel loads only the shell.
 const Announcements = lazy(() => import('./pages/Announcements.jsx'));
 const AuditLog = lazy(() => import('./pages/AuditLog.jsx'));
+const Banners = lazy(() => import('./pages/Banners.jsx'));
 const BookingDetail = lazy(() => import('./pages/BookingDetail.jsx'));
 const Bookings = lazy(() => import('./pages/Bookings.jsx'));
 const Categories = lazy(() => import('./pages/Categories.jsx'));
+const Coupons = lazy(() => import('./pages/Coupons.jsx'));
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
 const Moderation = lazy(() => import('./pages/Moderation.jsx'));
 const Overview = lazy(() => import('./pages/Overview.jsx'));
@@ -32,6 +34,9 @@ const NAV = [
   { section: 'Trust & safety' },
   { to: '/moderation', label: 'Moderation', icon: ShieldCheck, tone: '#7fd6cf', permission: 'content.moderate', element: <Moderation />, count: (d) => d.adoption.awaitingReview },
   { to: '/reports', label: 'Reports', icon: Siren, tone: '#ff9fba', permission: 'reports.manage', element: <Reports />, count: (d) => d.reports.open },
+  { section: 'Marketing' },
+  { to: '/banners', label: 'Banners', icon: GalleryHorizontal, tone: '#ffd36b', permission: 'marketing.manage', element: <Banners /> },
+  { to: '/coupons', label: 'Discounts & coupons', icon: TicketPercent, tone: '#ff9fba', permission: 'marketing.manage', element: <Coupons /> },
   { section: 'Platform' },
   { to: '/platform', label: 'Cities & features', icon: MapPinned, tone: '#7fd6cf', permission: 'analytics.read', element: <Platform /> },
   { to: '/categories', label: 'Categories', icon: Shapes, tone: '#8cc0f5', permission: 'vendors.read', element: <Categories /> },

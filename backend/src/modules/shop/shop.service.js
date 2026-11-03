@@ -15,16 +15,37 @@ const PAYMENT_WINDOW_MINUTES = 30;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode = () => 'OD' + Array.from(crypto.randomBytes(7), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
 
-async function couponDiscount(code, subtotalPaise) {
-  if (!code) return { discountPaise: 0 };
-  const coupon = await Coupon.findOne({ code: code.toUpperCase(), active: true }).lean();
-  if (!coupon || (coupon.expiresAt && coupon.expiresAt < new Date())) return { discountPaise: 0, couponError: 'This coupon is not valid' };
-  if (subtotalPaise < coupon.minOrderPaise) {
-    return { discountPaise: 0, couponError: `Add items worth ₹${Math.ceil((coupon.minOrderPaise - subtotalPaise) / 100)} more to use ${coupon.code}` };
-  }
+const isLive = (c, now = new Date()) => c.active && (!c.startsAt || c.startsAt <= now) && (!c.expiresAt || c.expiresAt > now);
+
+function amountOff(coupon, subtotalPaise) {
   let discountPaise = coupon.type === 'percent' ? Math.floor((subtotalPaise * coupon.value) / 100) : coupon.value;
   if (coupon.maxDiscountPaise) discountPaise = Math.min(discountPaise, coupon.maxDiscountPaise);
-  return { discountPaise: Math.min(discountPaise, subtotalPaise), coupon };
+  return Math.min(discountPaise, subtotalPaise);
+}
+
+// The best automatic discount the cart qualifies for, if any.
+async function autoDiscount(subtotalPaise) {
+  if (!subtotalPaise) return null;
+  const now = new Date();
+  const offers = await Coupon.find({ autoApply: true, active: true, minOrderPaise: { $lte: subtotalPaise } }).lean();
+  let best = null;
+  for (const coupon of offers.filter((c) => isLive(c, now))) {
+    const discountPaise = amountOff(coupon, subtotalPaise);
+    if (discountPaise > (best?.discountPaise ?? 0)) best = { discountPaise, coupon };
+  }
+  return best;
+}
+
+// One offer per order: a valid code the customer entered, otherwise the best automatic discount.
+async function couponDiscount(code, subtotalPaise) {
+  const fallback = async (couponError) => ({ ...((await autoDiscount(subtotalPaise)) ?? { discountPaise: 0 }), couponError });
+  if (!code) return fallback();
+  const coupon = await Coupon.findOne({ code: code.toUpperCase(), active: true }).lean();
+  if (!coupon || !isLive(coupon)) return fallback('This coupon is not valid');
+  if (subtotalPaise < coupon.minOrderPaise) {
+    return fallback(`Add items worth ₹${Math.ceil((coupon.minOrderPaise - subtotalPaise) / 100)} more to use ${coupon.code}`);
+  }
+  return { discountPaise: amountOff(coupon, subtotalPaise), coupon };
 }
 
 // Sellers whose products the shop shows and sells: an active business with an approved seller
@@ -93,7 +114,7 @@ export async function quote(items, couponCode) {
       savingsPaise: mrpTotalPaise - subtotalPaise + discountPaise,
       freeDeliveryFromPaise: FREE_DELIVERY_FROM_PAISE,
     },
-    coupon: coupon ? { code: coupon.code, description: coupon.description } : undefined,
+    coupon: coupon ? { code: coupon.code, description: coupon.description, automatic: Boolean(coupon.autoApply) } : undefined,
     couponError,
   };
 }

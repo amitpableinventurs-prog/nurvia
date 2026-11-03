@@ -446,3 +446,32 @@ button.danger-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--
 .vd-checklist button { text-transform: capitalize; }
 a.tb-note { display: block; color: var(--ink); font-weight: 400; }
 a.tb-note:hover { background: var(--surface-2); text-decoration: none; }
+
+/* ───────────── Marketing: banners, discounts and coupons ───────────── */
+.banner-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.banner-card { gap: 12px; }
+.promo {
+  display: flex; align-items: center; gap: 14px; min-height: 128px; padding: 16px 18px; border-radius: 16px; overflow: hidden;
+  background: radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--promo-accent) 28%, transparent), transparent 55%), var(--promo-bg); color: var(--promo-fg);
+}
+.promo-text { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; flex: 1; min-width: 0; }
+.promo-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--promo-accent); }
+.promo-title { font-family: var(--display); font-size: 20px; font-weight: 600; line-height: 1.15; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.promo-sub { font-size: 12.5px; line-height: 1.4; opacity: 0.86; }
+.promo-cta { margin-top: 6px; padding: 5px 14px; border-radius: 999px; background: var(--promo-accent); color: var(--promo-bg); font-size: 12px; font-weight: 700; }
+.promo-img { width: 92px; height: 92px; object-fit: cover; border-radius: 12px; flex-shrink: 0; }
+dialog.wide { width: min(940px, calc(100vw - 32px)); }
+.editor { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+.grid-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grid-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-fields input, .grid-fields select { width: 100%; min-width: 0; }
+fieldset.choices { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+fieldset.choices legend { font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 0; margin-bottom: 6px; }
+label.choice { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); cursor: pointer; }
+label.choice:has(input:checked) { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 10%, var(--surface)); }
+label.choice input { min-height: 0; margin: 0; accent-color: var(--brand); }
+input.swatch { padding: 3px; height: 38px; cursor: pointer; }
+@media (max-width: 760px) {
+  .editor, .grid-fields, .grid-fields.three { grid-template-columns: minmax(0, 1fr); }
+  .banner-grid { grid-template-columns: minmax(0, 1fr); }
+}

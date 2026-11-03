@@ -190,4 +190,26 @@ export const formatDay = (value) => (value ? new Date(value).toLocaleDateString(
 export const formatRupees = (paise) =>
   paise === undefined || paise === null ? '—' : (paise / 100).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 });
 
+// <input type="datetime-local"> works in the browser's own time zone, without seconds.
+export const toLocalInput = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
+export const fromLocalInput = (value) => (value ? new Date(value).toISOString() : null);
+
+// Where a scheduled item (banner, coupon) stands now: switched off, not started, ended or live.
+const SCHEDULE = { off: ['', 'Off'], scheduled: ['warning', 'Scheduled'], ended: ['critical', 'Ended'], live: ['good', 'Live'] };
+export const scheduleState = ({ active, startsAt, endsAt, expiresAt }, now = Date.now()) => {
+  const end = endsAt ?? expiresAt;
+  if (!active) return 'off';
+  if (startsAt && new Date(startsAt) > now) return 'scheduled';
+  if (end && new Date(end) <= now) return 'ended';
+  return 'live';
+};
+export function SchedulePill({ item }) {
+  const [tone, label] = SCHEDULE[scheduleState(item)];
+  return <span className={`badge ${tone}`}>{label}</span>;
+}
+
 export const compact = (n) => (n >= 1000 ? Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(n) : String(n));

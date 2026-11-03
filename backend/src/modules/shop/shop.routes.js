@@ -123,6 +123,9 @@ const cartItems = z
   .array(z.object({ productId: objectId, sku: z.string().min(1).max(60), qty: z.number().int().min(1).max(10) }))
   .max(50);
 
+// One offer per cart: the entered `couponCode` when it is valid, otherwise the best automatic
+// discount the cart qualifies for (`coupon.automatic: true`, no code needed). An invalid code still
+// returns `couponError` alongside any automatic discount.
 router.post('/quote', validate({ body: { items: cartItems, couponCode: z.string().trim().max(20).optional() } }), async (req, res) => {
   res.json(await quote(req.valid.body.items, req.valid.body.couponCode));
 });

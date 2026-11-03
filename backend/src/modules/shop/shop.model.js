@@ -69,6 +69,8 @@ productSchema.pre('validate', function denormalise() {
   this.inStock = this.variants.some((v) => v.stock > 0);
 });
 
+// A cart discount. A coupon is applied when the customer enters its code; an automatic discount
+// (`autoApply`) is applied at checkout without one, and the order still records its code.
 const couponSchema = new mongoose.Schema(
   {
     code: { type: String, required: true, uppercase: true, trim: true, match: /^[A-Z0-9]{3,20}$/ },
@@ -77,7 +79,9 @@ const couponSchema = new mongoose.Schema(
     value: { type: Number, required: true, min: 0 }, // percent, or paise for flat
     minOrderPaise: { type: Number, default: 0 },
     maxDiscountPaise: Number,
+    autoApply: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
+    startsAt: Date,
     expiresAt: Date,
   },
   { timestamps: true },

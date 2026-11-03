@@ -53,13 +53,14 @@ async function refreshTokens() {
 export const onSessionExpired = { handler: () => {} };
 
 async function send(method, path, body, { raw = false, retry = true } = {}) {
+  const form = body instanceof FormData;
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
-      ...(body !== undefined && { 'Content-Type': 'application/json' }),
+      ...(body !== undefined && !form && { 'Content-Type': 'application/json' }),
       ...(tokens.access && { Authorization: `Bearer ${tokens.access}` }),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined || form ? body : JSON.stringify(body),
   });
 
   if (res.status === 401 && retry && tokens.refresh) {
@@ -87,6 +88,14 @@ export const api = {
   post: (path, body = {}) => send('POST', path, body),
   patch: (path, body) => send('PATCH', path, body),
   put: (path, body) => send('PUT', path, body),
+  delete: (path) => send('DELETE', path),
+  // Uploads one file for `purpose` (e.g. "banner"); returns the stored file with its `_id` and `url`.
+  upload(file, purpose) {
+    const form = new FormData();
+    form.append('purpose', purpose);
+    form.append('file', file);
+    return send('POST', '/files', form);
+  },
   // Saves an authenticated download (e.g. a CSV export) under the server's suggested file name.
   async download(path, params, fallbackName = 'download') {
     const res = await send('GET', path + qs(params), undefined, { raw: true });
