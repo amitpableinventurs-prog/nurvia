@@ -163,6 +163,19 @@ orderSchema.index({ tenant: 1, createdAt: -1 });
 orderSchema.index({ 'payment.orderId': 1 }, { sparse: true });
 orderSchema.index({ status: 1, createdAt: 1 });
 
+// The customer's cart, kept on the server so it survives closing the app and moves between devices.
+// Prices are not stored: the cart is priced fresh (quote) every time it is read.
+const cartSchema = new mongoose.Schema(
+  {
+    user: { type: ObjectId, ref: 'User', required: true },
+    items: [{ _id: false, product: { type: ObjectId, ref: 'Product', required: true }, sku: { type: String, required: true }, qty: { type: Number, required: true, min: 1 }, addedAt: { type: Date, default: Date.now } }],
+  },
+  { timestamps: true },
+);
+cartSchema.plugin(tenantPlugin);
+cartSchema.index({ tenant: 1, user: 1 }, { unique: true });
+
 export const Product = mongoose.model('Product', productSchema);
+export const Cart = mongoose.model('Cart', cartSchema);
 export const Coupon = mongoose.model('Coupon', couponSchema);
 export const ShopOrder = mongoose.model('ShopOrder', orderSchema);
