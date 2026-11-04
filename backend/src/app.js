@@ -53,6 +53,10 @@ const panels = {
   '/vendor': path.resolve(import.meta.dirname, '../../vendor-panel/dist'),
 };
 
+// Any port on this machine, and any port on a private network address (10.x, 172.16-31.x, 192.168.x).
+const localOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+const lanOrigin = /^https?:\/\/(10(\.\d{1,3}){3}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}|192\.168(\.\d{1,3}){2})(:\d+)?$/;
+
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -76,13 +80,18 @@ export function createApp() {
   // upgrade-insecure-requests would send the panels' own scripts to https and break them.
   const csp = { directives: { upgradeInsecureRequests: env.isProd ? [] : null } };
   app.use(helmet({ contentSecurityPolicy: csp, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-  app.use(cors({ origin: env.corsOrigins, allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant', 'X-Request-Id'] }));
+  // Outside production the API is also called from origins nobody lists ahead of time: Flutter web on
+  // localhost (a new port on every run) and apps opened from another device by a Wi-Fi address.
+  const corsOrigins = env.isProd ? env.corsOrigins : [...env.corsOrigins, localOrigin, lanOrigin];
+  app.use(cors({ origin: corsOrigins, allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant', 'X-Request-Id'] }));
   if (env.nodeEnv !== 'test') app.use(morgan(env.isProd ? 'combined' : 'dev'));
 
   app.get('/health', (_req, res) => {
     const db = mongoose.connection.readyState === 1;
     res.status(db ? 200 : 503).json({ status: db ? 'ok' : 'degraded', db });
   });
+  // Opening the API's base address in a browser shows that it is up, instead of a 404.
+  app.get('/api/v1', (_req, res) => res.json({ name: 'Nurvia API', version: 'v1', health: '/health', ...(env.apiDocs && { docs: '/api-docs' }) }));
   app.use('/media', express.static(publicDir, { maxAge: '7d', index: false, dotfiles: 'deny' }));
 
   // The webhook needs the unparsed body for signature checks, so it is registered before express.json().

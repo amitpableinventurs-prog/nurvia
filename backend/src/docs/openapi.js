@@ -18,10 +18,10 @@ const joinPath = (...parts) => parts.join('').replace(/\/{2,}/g, '/').replace(/(
 // Express ":id" segments become OpenAPI "{id}".
 const toOpenApiPath = (path) => path.replace(/:(\w+)/g, '{$1}');
 
-// post /api/v1/auth/otp/request → postAuthOtpRequest. Without an operationId Swagger UI builds deep
-// links with "_", which it warns about.
+// post /api/v1/auth/otp/request → postAuthOtpRequest; get /api/v1 itself → getApiV1, apart from get /.
+// Without an operationId Swagger UI builds deep links with "_", which it warns about.
 const operationIdFor = (method, path) =>
-  [method, ...path.replace(API_PREFIX, '').split('/').filter(Boolean).map((s) => (s.startsWith(':') ? `by-${s.slice(1)}` : s))]
+  [method, ...path.replace(`${API_PREFIX}/`, '/').split('/').filter(Boolean).map((s) => (s.startsWith(':') ? `by-${s.slice(1)}` : s))]
     .join('-')
     .replace(/[^a-zA-Z0-9]+(.)/g, (_m, c) => c.toUpperCase());
 
