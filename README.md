@@ -75,7 +75,8 @@ Each provider sits behind an adapter in `backend/src/integrations/`. Switch prov
 | Call relay (Explore → Call Store) | **Not masked yet.** The `direct` adapter gives customers the shop's own number. A masking provider (Exotel, Knowlarity) is needed before calls hide both numbers. | `CALL_RELAY_PROVIDER` |
 | File storage | **Local disk.** Swap to S3, GCS or R2 for production. | `UPLOAD_DIR` |
 | AI health summary | **Endpoint and data-minimisation in place; no provider yet.** Returns 503 until Nurvia approves a provider. | `AI_PROVIDER` |
-| Maps | The API does the geo search itself (MongoDB `2dsphere`). The apps still need a Google Maps key for map display and geocoding. | — |
+| Maps | The API does the geo search itself (MongoDB `2dsphere`). The apps still need a Google Maps key for map display. | — |
+| Address search | **Photon implemented** (OpenStreetMap, free, no key) and **Google** (Places + Geocoding; written to Google's docs, not yet tried with a key). `/geo/search` suggests addresses as the user types, `/geo/places/{placeId}` gives the picked one as address fields plus a map pin, `/geo/reverse` gives the address at a pin. The partner panel's address fields use it; the apps can use the same endpoints. The public Photon server is fair-use only, so production should use Google or a self-hosted Photon. | `GEOCODING_PROVIDER`, `GOOGLE_MAPS_API_KEY`, `PHOTON_URL` |
 | Email | Not wired yet. Email codes and sign-in links use the same OTP adapter. | `MAGIC_LINK_URL` |
 | Google / Apple sign-in | **Implemented** (ID tokens checked against the providers' published keys). Off until client IDs are set. | `GOOGLE_CLIENT_IDS`, `APPLE_CLIENT_IDS` |
 

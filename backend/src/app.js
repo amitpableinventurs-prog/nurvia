@@ -24,6 +24,7 @@ import communityRoutes from './modules/community/community.routes.js';
 import communityDogRoutes from './modules/community-dogs/community-dog.routes.js';
 import exploreRoutes, { vendorStockChecksRouter } from './modules/explore/explore.routes.js';
 import fileRoutes from './modules/files/file.routes.js';
+import geoRoutes from './modules/geo/geo.routes.js';
 import homeRoutes from './modules/home/home.routes.js';
 import { vendorSettlementsRouter } from './modules/finance/finance.routes.js';
 import loyaltyRoutes from './modules/loyalty/loyalty.routes.js';
@@ -110,6 +111,7 @@ export function createApp() {
   api.use('/payments', paymentRoutes);
   api.use('/reviews', reviewRoutes);
   api.use('/config', platformRoutes);
+  api.use('/geo', geoRoutes);
   // Sellers keep managing their catalogue, and customers keep seeing past orders, while the marketplace is off.
   const marketplace = requireFeature('marketplace');
   api.use('/shop', (req, res, next) => (req.path.startsWith('/seller') || (req.method === 'GET' && req.path.startsWith('/orders')) ? next() : marketplace(req, res, next)), shopRoutes);

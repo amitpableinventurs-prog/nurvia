@@ -1,5 +1,6 @@
 import { ImagePlus, LocateFixed, Plus, X } from 'lucide-react';
 import { useState } from 'react';
+import { AddressSearch, addressFields } from '../address-search.jsx';
 import { api } from '../api.js';
 import { useSession } from '../session.jsx';
 import { ErrorNote, useApi } from '../ui.jsx';
@@ -22,6 +23,7 @@ export default function Profile() {
     line1: v.address.line1,
     line2: v.address.line2 ?? '',
     city: v.address.city,
+    state: v.address.state ?? '',
     pincode: v.address.pincode ?? '',
     categoryIds: v.categories.map((c) => c._id ?? c),
     homeVisits: v.homeVisits,
@@ -64,7 +66,7 @@ export default function Profile() {
         phone: form.phone.trim() || undefined,
         email: form.email.trim() || undefined,
         categoryIds: form.categoryIds,
-        address: { line1: form.line1, ...(form.line2 && { line2: form.line2 }), city: form.city, ...(form.pincode && { pincode: form.pincode }) },
+        address: { line1: form.line1, ...(form.line2 && { line2: form.line2 }), city: form.city, ...(form.state && { state: form.state }), ...(form.pincode && { pincode: form.pincode }) },
         homeVisits: form.homeVisits,
         slotCapacity: Number(form.slotCapacity),
         operatingHours: ORDER.flatMap((day) => hours[day].map((w) => ({ day, ...w }))),
@@ -145,7 +147,18 @@ export default function Profile() {
           <div className="vp-grid-2">
             <label className="field">
               Address
-              <input value={form.line1} onChange={set('line1')} required />
+              <AddressSearch
+                value={form.line1}
+                onChange={set('line1')}
+                // A picked address fills in every field and moves the map pin to it.
+                onPick={(place) => {
+                  setForm((f) => ({ ...f, ...addressFields(place.address) }));
+                  setLocation(place.location);
+                }}
+                near={location ?? { lat: v.location.coordinates[1], lng: v.location.coordinates[0] }}
+                required
+                placeholder="Search your shop, street or area"
+              />
             </label>
             <label className="field">
               Area / locality
@@ -153,7 +166,7 @@ export default function Profile() {
             </label>
             <label className="field">
               City
-              <input value={form.city} onChange={set('city')} required />
+              <input value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value, state: '' }))} required />
             </label>
             <label className="field">
               PIN code

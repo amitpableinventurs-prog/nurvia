@@ -95,6 +95,14 @@ export const env = {
     provider: process.env.AI_PROVIDER ?? 'disabled',
   },
 
+  // Address search as you type, and the address at a map pin. photon: OpenStreetMap data, no key
+  // (PHOTON_URL can point at a self-hosted instance). google: Places and Geocoding APIs.
+  geocoding: {
+    provider: process.env.GEOCODING_PROVIDER ?? 'photon',
+    photonUrl: (process.env.PHOTON_URL ?? 'https://photon.komoot.io').replace(/\/$/, ''),
+    googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
+  },
+
   jobs: {
     enabled: process.env.JOBS_ENABLED !== 'false',
   },

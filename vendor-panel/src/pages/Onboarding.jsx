@@ -1,5 +1,6 @@
 import { LocateFixed } from 'lucide-react';
 import { useState } from 'react';
+import { AddressSearch, addressFields } from '../address-search.jsx';
 import { api } from '../api.js';
 import { NurviaMark } from '../icons.jsx';
 import { useSession } from '../session.jsx';
@@ -15,7 +16,7 @@ const CITY_NOTES = {
 export default function Onboarding() {
   const { session, signOut, reload } = useSession();
   const { data: categories } = useApi('/categories', { kind: 'vendor' });
-  const [form, setForm] = useState({ ownerName: session.user.name ?? '', businessName: '', categoryIds: [], line1: '', line2: '', city: '', pincode: '', phone: session.user.phone ?? '', email: session.user.email ?? '', homeVisits: false });
+  const [form, setForm] = useState({ ownerName: session.user.name ?? '', businessName: '', categoryIds: [], line1: '', line2: '', city: '', state: '', pincode: '', phone: session.user.phone ?? '', email: session.user.email ?? '', homeVisits: false });
   const [location, setLocation] = useState(null);
   const { data: config } = useApi('/config', { city: form.city.trim() || undefined });
   // Without a shared location, the business is pinned at its city's centre so it still shows up nearby.
@@ -27,12 +28,22 @@ export default function Onboarding() {
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
   const toggleCategory = (id) => setForm((f) => ({ ...f, categoryIds: f.categoryIds.includes(id) ? f.categoryIds.filter((c) => c !== id) : [...f.categoryIds, id].slice(0, 5) }));
 
+  // A picked address fills in every field and moves the map pin to it.
+  const pickPlace = (place) => {
+    setForm((f) => ({ ...f, ...addressFields(place.address) }));
+    setLocation(place.location);
+  };
+
   const locate = () => {
     setLocating(true);
     navigator.geolocation?.getCurrentPosition(
-      (p) => {
-        setLocation({ lat: p.coords.latitude, lng: p.coords.longitude });
+      async (p) => {
+        const here = { lat: p.coords.latitude, lng: p.coords.longitude };
+        setLocation(here);
         setLocating(false);
+        // Fills in the address fields that are still empty from the address at the pin.
+        const place = await api.get('/geo/reverse', here).catch(() => null);
+        if (place) setForm((f) => ({ ...f, ...Object.fromEntries(Object.entries(addressFields(place.address)).filter(([key]) => !f[key].trim())) }));
       },
       () => setLocating(false),
       { timeout: 10_000 },
@@ -50,7 +61,7 @@ export default function Onboarding() {
         categoryIds: form.categoryIds,
         phone: form.phone ? (form.phone.startsWith('+') ? form.phone : `+91${form.phone}`) : undefined,
         ...(form.email.trim() && { email: form.email.trim() }),
-        address: { line1: form.line1, ...(form.line2 && { line2: form.line2 }), city: form.city, ...(form.pincode && { pincode: form.pincode }) },
+        address: { line1: form.line1, ...(form.line2 && { line2: form.line2 }), city: form.city, ...(form.state && { state: form.state }), ...(form.pincode && { pincode: form.pincode }) },
         location: pin,
         homeVisits: form.homeVisits,
         // A sensible default the partner can change on the profile page.
@@ -107,7 +118,7 @@ export default function Onboarding() {
         <div className="vp-grid-2">
           <label className="field">
             Address
-            <input value={form.line1} onChange={set('line1')} required placeholder="Shop no., street" />
+            <AddressSearch value={form.line1} onChange={set('line1')} onPick={pickPlace} near={pin} required placeholder="Search your shop, street or area" />
           </label>
           <label className="field">
             Area / locality
@@ -115,7 +126,7 @@ export default function Onboarding() {
           </label>
           <label className="field">
             City
-            <input value={form.city} onChange={set('city')} required list="vp-cities" placeholder="Delhi NCR" />
+            <input value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value, state: '' }))} required list="vp-cities" placeholder="Delhi NCR" />
             <datalist id="vp-cities">
               {config?.cities.map((c) => (
                 <option key={c.slug} value={c.name} />
@@ -151,6 +162,14 @@ export default function Onboarding() {
           </div>
         </div>
         {bookingState && CITY_NOTES[bookingState] && <div className="notice small">{CITY_NOTES[bookingState](config.city?.name ?? form.city.trim())}</div>}
+        {location && (
+          <div className="small muted">
+            Map pin: {location.lat.toFixed(5)}, {location.lng.toFixed(5)} ·{' '}
+            <a href={`https://www.google.com/maps?q=${location.lat},${location.lng}`} target="_blank" rel="noreferrer">
+              Check it on the map
+            </a>
+          </div>
+        )}
         {!location && (
           <div className="small muted">
             {pin
