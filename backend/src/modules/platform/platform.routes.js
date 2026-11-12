@@ -4,6 +4,7 @@ import { LANGUAGES } from '../../common/languages.js';
 import { badRequest } from '../../common/errors.js';
 import { validate } from '../../common/validate.js';
 import { apiDoc } from '../../docs/api-doc.js';
+import { supportContent } from './support-content.js';
 import { CITY_MODULES, FEATURES, cityModuleState, citySummary, getPlatform, matchCity, pickerCity, searchCities } from './platform.service.js';
 
 const router = Router();
@@ -36,6 +37,19 @@ router.get(
       // For the "Preferred Language" picker.
       languages: LANGUAGES,
     });
+  },
+);
+
+router.get(
+  '/support',
+  apiDoc({
+    summary: 'Help & Support screen: care desk, contact details and common questions',
+    description: 'Public, so it also works signed out. `contact.email` opens the mail app; show `answer` when a question is tapped.',
+    responses: { 200: { description: 'Help & Support content', example: supportContent() } },
+  }),
+  (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(supportContent());
   },
 );
 

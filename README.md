@@ -3,7 +3,7 @@
 | Folder | What it is |
 |---|---|
 | [backend/](backend/) | Shared API for the Pet Parent app, Vendor app and Admin panel. Node.js + Express 5 + MongoDB (Mongoose). |
-| [admin-panel/](admin-panel/) | Admin panel for Nurvia staff. React 18 + Vite. Opens on the super admin overview: snapshot metrics and four triage queues (vendor applications, safety alerts, community dog badges, adoption sign-off). It has no screen for browsing or suspending pet parents; that is done through `/admin/users` in the API. |
+| [admin-panel/](admin-panel/) | Admin panel for Nurvia staff. React 18 + Vite. Opens on the super admin overview: snapshot metrics and four triage queues (vendor applications, safety alerts, community dog badges, adoption sign-off). The Customers screen lists pet parents with their pets, bookings and orders; suspending one is still done through `/admin/users` in the API. |
 | [vendor-panel/](vendor-panel/) | Partner panel for vets, groomers and other providers: today's schedule, booking requests, services and prices, reviews, earnings, business profile and KYC, plus the shop: products, orders, returns and wishlist counts. React 18 + Vite. A separate app from the admin panel, with its own login (mobile OTP). |
 
 There is no pet parent website. The mobile apps (Pet Parent, Vendor) are not in this repo yet; they use the same `/api/v1` endpoints, including the customer side of the shop.

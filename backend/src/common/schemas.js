@@ -16,6 +16,9 @@ export const pointSchema = new mongoose.Schema(
 export const addressSchema = new mongoose.Schema(
   {
     label: String,
+    // Who receives a delivery here, so a saved address can be sent straight to POST /shop/orders.
+    name: String,
+    phone: String,
     line1: { type: String, required: true },
     line2: String,
     city: { type: String, required: true },

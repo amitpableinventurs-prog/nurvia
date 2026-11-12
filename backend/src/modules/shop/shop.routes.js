@@ -6,6 +6,7 @@ import { badRequest, conflict, notFound } from '../../common/errors.js';
 import { paginate } from '../../common/paginate.js';
 import { ROLES } from '../../common/roles.js';
 import { escapeRegex, objectId, pageQuery, partialShape, validate } from '../../common/validate.js';
+import { env } from '../../config/env.js';
 import { Category } from '../categories/category.model.js';
 import { attachmentsFor } from '../files/file.routes.js';
 import { notify } from '../notifications/notify.js';
@@ -15,6 +16,7 @@ import { sellerOnboardingRouter } from '../finance/finance.routes.js';
 import { onQualifyingActivity } from '../loyalty/loyalty.service.js';
 import { Wishlist } from './aftercare.model.js';
 import { aftercareRouter, sellerReturnsRouter } from './aftercare.routes.js';
+import cartRouter from './cart.routes.js';
 import { ORDER_STATUSES, PET_TYPES, Product, ShopOrder } from './shop.model.js';
 import { cancelOrder, liveSellerIds, placeOrder, quote, shownProducts } from './shop.service.js';
 
@@ -147,7 +149,8 @@ router.post(
     body: { items: cartItems.min(1), couponCode: z.string().trim().max(20).optional(), address, paymentMethod: z.enum(['online', 'cod']), redeemPoints: z.number().int().min(0).max(1_000_000).optional() },
   }),
   async (req, res) => {
-    await assertModuleAt('marketplace', { city: req.valid.body.address.city });
+    // Off outside production for now, so the apps can be tested with an address in any city.
+    if (env.isProd) await assertModuleAt('marketplace', { city: req.valid.body.address.city });
     res.status(201).json(await placeOrder(req.user, req.valid.body));
   },
 );
@@ -362,5 +365,6 @@ seller.use(sellerReturnsRouter);
 seller.use(sellerOnboardingRouter);
 router.use('/seller', seller);
 router.use(aftercareRouter);
+router.use(cartRouter);
 
 export default router;

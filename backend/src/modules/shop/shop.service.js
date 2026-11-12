@@ -5,7 +5,7 @@ import { LoyaltyEntry } from '../loyalty/loyalty.model.js';
 import { movePoints, pointsDiscount } from '../loyalty/loyalty.service.js';
 import { notify } from '../notifications/notify.js';
 import { Vendor } from '../vendors/vendor.model.js';
-import { Coupon, Product, ShopOrder } from './shop.model.js';
+import { Cart, Coupon, Product, ShopOrder } from './shop.model.js';
 
 export const FREE_DELIVERY_FROM_PAISE = 49_900;
 export const DELIVERY_FEE_PAISE = 4_900;
@@ -157,9 +157,10 @@ export async function placeOrder(user, { items, couponCode, address, paymentMeth
   const code = newCode();
   const status = paymentMethod === 'cod' ? 'placed' : 'pending_payment';
   let spent = null;
+  let order;
   try {
     if (points.points) spent = await movePoints(user._id, -points.points, { reason: 'redeemed', refType: 'shop_order', note: code });
-    const order = await ShopOrder.create({
+    order = await ShopOrder.create({
       code,
       user: user._id,
       items: q.lines,
@@ -172,12 +173,21 @@ export async function placeOrder(user, { items, couponCode, address, paymentMeth
     });
     if (spent) await LoyaltyEntry.updateOne({ _id: spent._id }, { ref: order._id });
     if (status === 'placed') await notifySellers(order);
-    return order;
   } catch (err) {
     await releaseLines(q.lines);
     if (spent) await movePoints(user._id, points.points, { reason: 'redemption_reversed', refType: 'shop_order', note: `${code} not placed` });
     throw err;
   }
+  if (status === 'placed') await removeFromCart(order);
+  return order;
+}
+
+// Ordered lines leave the customer's cart once the order is really placed, so an online payment
+// that is abandoned leaves the cart as it was. The order stands whatever happens here: reporting
+// it as failed would invite the customer to order twice.
+async function removeFromCart(order) {
+  const ordered = order.items.map((i) => ({ product: i.product, sku: i.sku }));
+  await Cart.updateOne({ user: order.user }, { $pull: { items: { $or: ordered } } }).catch((err) => console.error('[cart] could not clear ordered items', err));
 }
 
 async function notifySellers(order) {
@@ -197,6 +207,7 @@ export async function markOrderPaid(order, paymentId) {
   }
   await order.save();
   await notifySellers(order);
+  await removeFromCart(order);
   return order;
 }
 

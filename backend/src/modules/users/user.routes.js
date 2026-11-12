@@ -6,6 +6,7 @@ import { LANGUAGE_CODES } from '../../common/languages.js';
 import { indianMobile, objectId, point, validate } from '../../common/validate.js';
 import { otpDelivery, otpLimiter, otpTarget, targetOf } from '../auth/auth.routes.js';
 import { acceptTerms, onboardingFor, requestOtp, revokeAllSessions, verifyContact } from '../auth/auth.service.js';
+import { apiDoc } from '../../docs/api-doc.js';
 import { attachmentsFor } from '../files/file.routes.js';
 import { registerDevice } from '../notifications/notify.js';
 import { citySummary, getPlatform, matchCity, resolveCity } from '../platform/platform.service.js';
@@ -14,8 +15,11 @@ import { User } from './user.model.js';
 const router = Router();
 router.use(authenticate);
 
+const MAX_ADDRESSES = 10;
 const address = z.object({
   label: z.string().trim().max(40).optional(),
+  name: z.string().trim().min(2).max(120).optional(),
+  phone: indianMobile.optional(),
   line1: z.string().trim().min(1).max(200),
   line2: z.string().trim().max(200).optional(),
   city: z.string().trim().min(1).max(80),
@@ -154,7 +158,42 @@ router.put(
   },
 );
 
-router.put('/me/addresses', validate({ body: { addresses: z.array(address).max(10) } }), async (req, res) => {
+const ADDRESS_EXAMPLE = {
+  _id: '6ad889a8e6cbea1891b82800', label: 'Home', name: 'Asha Rao', phone: '+919845000000', line1: '12 MG Road', line2: 'Near Metro', city: 'Bengaluru', state: 'Karnataka', pincode: '560001',
+  location: { type: 'Point', coordinates: [77.6101, 12.9758] },
+};
+
+router.get(
+  '/me/addresses',
+  apiDoc({ summary: "The user's saved addresses", responses: { 200: { description: 'Saved addresses, oldest first', example: [ADDRESS_EXAMPLE] } } }),
+  async (req, res) => {
+    const user = await User.findById(req.user._id).select('addresses').lean();
+    res.json(user.addresses ?? []);
+  },
+);
+
+router.post(
+  '/me/addresses',
+  apiDoc({
+    summary: 'Add a saved address',
+    description: `Only \`line1\` and \`city\` are required. Send \`location\` as \`{ lat, lng }\`; it comes back as GeoJSON. \`GET /geo/search\` and \`GET /geo/places/{placeId}\` can fill these fields in. A user can save ${MAX_ADDRESSES} addresses. Returns all saved addresses; the new one is last. To edit or delete, send the whole list to \`PUT /users/me/addresses\`.`,
+    requestExample: { label: 'Home', name: 'Asha Rao', phone: '9845000000', line1: '12 MG Road', line2: 'Near Metro', city: 'Bengaluru', state: 'Karnataka', pincode: '560001', location: { lat: 12.9758, lng: 77.6101 } },
+    responses: { 201: { description: 'All saved addresses', example: [ADDRESS_EXAMPLE] } },
+  }),
+  validate({ body: address.shape }),
+  async (req, res) => {
+    // The limit is part of the update, so two quick taps cannot go past it.
+    const user = await User.findOneAndUpdate(
+      { _id: req.user._id, [`addresses.${MAX_ADDRESSES - 1}`]: { $exists: false } },
+      { $push: { addresses: req.valid.body } },
+      { new: true, runValidators: true },
+    );
+    if (!user) throw badRequest(`You can save up to ${MAX_ADDRESSES} addresses`);
+    res.status(201).json(user.addresses);
+  },
+);
+
+router.put('/me/addresses', validate({ body: { addresses: z.array(address).max(MAX_ADDRESSES) } }), async (req, res) => {
   const user = await User.findByIdAndUpdate(req.user._id, { addresses: req.valid.body.addresses }, { new: true, runValidators: true });
   res.json(user.addresses);
 });

@@ -69,6 +69,10 @@ export const env = {
     supportUrl: process.env.SUPPORT_URL ?? `${(process.env.WEB_BASE_URL ?? 'http://localhost:5282').replace(/\/$/, '')}/support`,
   },
 
+  support: {
+    email: process.env.SUPPORT_EMAIL ?? 'support@nurviapetcare.com',
+  },
+
   uploads: {
     dir: process.env.UPLOAD_DIR ?? 'storage',
     maxBytes: Number(process.env.UPLOAD_MAX_BYTES ?? 10 * 1024 * 1024),

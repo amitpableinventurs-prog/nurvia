@@ -9,11 +9,32 @@ import { audit } from '../audit/audit.model.js';
 import { hashPassword, revokeAllSessions } from '../auth/auth.service.js';
 import { Booking } from '../bookings/booking.model.js';
 import { Pet } from '../pets/pet.model.js';
+import { ShopOrder } from '../shop/shop.model.js';
 import { User } from '../users/user.model.js';
 import { Vendor } from '../vendors/vendor.model.js';
 
 const router = Router();
 const { USERS_READ, USERS_MANAGE, STAFF_MANAGE } = PERMISSIONS;
+
+// What a list row needs. Saved addresses, location and emergency contacts stay on the detail route.
+const LIST_FIELDS = 'name phone email avatarUrl city locality roles status statusReason lastLoginAt createdAt';
+
+// Pets, bookings and shop orders for one page of users. An order still waiting for payment was
+// never placed, so it does not count.
+async function activityCounts(users) {
+  const ids = users.map((u) => u._id);
+  const countBy = async (Model, key, match = {}) => {
+    const rows = await Model.aggregate([{ $match: { [key]: { $in: ids }, ...match } }, { $group: { _id: `$${key}`, count: { $sum: 1 } } }]);
+    return new Map(rows.map((r) => [String(r._id), r.count]));
+  };
+  const [pets, bookings, orders] = await Promise.all([
+    countBy(Pet, 'owner', { archivedAt: null }),
+    countBy(Booking, 'user'),
+    countBy(ShopOrder, 'user', { status: { $ne: 'pending_payment' } }),
+  ]);
+  const count = (map, user) => map.get(String(user._id)) ?? 0;
+  return users.map((u) => ({ ...u, petCount: count(pets, u), bookingCount: count(bookings, u), orderCount: count(orders, u) }));
+}
 
 router.get(
   '/',
@@ -34,7 +55,8 @@ router.get(
       ...(role && { roles: role }),
       ...(pattern && { $or: [{ name: pattern }, { phone: pattern }, { email: pattern }] }),
     };
-    res.json(await paginate(User, filter, { page, limit }));
+    const result = await paginate(User, filter, { page, limit, select: LIST_FIELDS });
+    res.json({ ...result, items: await activityCounts(result.items) });
   },
 );
 

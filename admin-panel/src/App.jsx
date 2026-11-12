@@ -1,4 +1,4 @@
-import { Activity, CalendarHeart, GalleryHorizontal, LayoutDashboard, MapPinned, LogOut, Megaphone, Moon, ScrollText, Shapes, ShieldCheck, Siren, Store, Sun, SunMoon, TicketPercent } from 'lucide-react';
+import { Activity, CalendarHeart, GalleryHorizontal, LayoutDashboard, MapPinned, LogOut, Megaphone, Moon, ScrollText, Shapes, ShieldCheck, Siren, Store, Sun, SunMoon, TicketPercent, Users } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { NurviaMark } from './icons.jsx';
@@ -14,6 +14,7 @@ const BookingDetail = lazy(() => import('./pages/BookingDetail.jsx'));
 const Bookings = lazy(() => import('./pages/Bookings.jsx'));
 const Categories = lazy(() => import('./pages/Categories.jsx'));
 const Coupons = lazy(() => import('./pages/Coupons.jsx'));
+const Customers = lazy(() => import('./pages/Customers.jsx'));
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
 const Moderation = lazy(() => import('./pages/Moderation.jsx'));
 const Overview = lazy(() => import('./pages/Overview.jsx'));
@@ -30,6 +31,7 @@ const NAV = [
   { to: '/analytics', label: 'Analytics', icon: Activity, tone: '#8cc0f5', permission: 'analytics.read', element: <Dashboard /> },
   { section: 'Operations' },
   { to: '/vendors', label: 'Vendors', icon: Store, tone: '#ffd36b', permission: 'vendors.read', element: <Vendors />, count: (d) => d.vendors.awaitingApproval },
+  { to: '/customers', label: 'Customers', icon: Users, tone: '#7fd8ac', permission: 'users.read', element: <Customers /> },
   { to: '/bookings', label: 'Bookings', icon: CalendarHeart, tone: '#ffab80', permission: 'bookings.read', element: <Bookings /> },
   { section: 'Trust & safety' },
   { to: '/moderation', label: 'Moderation', icon: ShieldCheck, tone: '#7fd6cf', permission: 'content.moderate', element: <Moderation />, count: (d) => d.adoption.awaitingReview },
