@@ -223,6 +223,21 @@ describe('sign-in screens', () => {
     }
   });
 
+  it('accepts the fixed code of an OTP_TEST_ACCOUNTS number, even in production', async () => {
+    const phone = '+919755430166';
+    env.otp.testAccounts.set(phone, '123456');
+    env.isProd = true;
+    try {
+      const { body } = await api().post('/auth/otp/request').send({ phone: '9755430166' }).expect(200);
+      expect(body.devCode).toBeUndefined();
+      const verified = await api().post('/auth/otp/verify').send({ phone, code: '123456' }).expect(200);
+      expect(verified.body.isNew).toBe(true);
+    } finally {
+      env.isProd = false;
+      env.otp.testAccounts.delete(phone);
+    }
+  });
+
   it('tells the app how many attempts are left', async () => {
     const phone = '+919630012346';
     const { sent } = await verifyNewPhoneRequest(phone);

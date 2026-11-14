@@ -44,3 +44,6 @@ if (env.otp.fixedCode && !/^\d{6}$/.test(env.otp.fixedCode)) throw new Error('OT
 
 // OTP_FIXED_CODE, on the same terms as devCode: never with a real provider or in production.
 export const fixedDevCode = () => (exposesDevCode() ? env.otp.fixedCode : undefined);
+
+// The fixed code of an OTP_TEST_ACCOUNTS number (any environment), or undefined.
+export const testAccountCode = (target) => env.otp.testAccounts.get(target);

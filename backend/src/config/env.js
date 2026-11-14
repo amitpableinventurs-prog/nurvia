@@ -51,6 +51,18 @@ export const env = {
     // Development only: every code is this value (e.g. 123456), so testers need not read devCode.
     // Ignored unless the provider is console and NODE_ENV is not production.
     fixedCode: process.env.OTP_FIXED_CODE || undefined,
+    // Test numbers with a fixed code, for QA and store review. Unlike OTP_FIXED_CODE they also work in
+    // production. Nothing is sent to them. Format: 9755430166:123456,9876543210:654321
+    testAccounts: new Map(
+      list(process.env.OTP_TEST_ACCOUNTS, '').map((entry) => {
+        const [phone, code] = entry.split(':').map((s) => s.trim());
+        const digits = (phone ?? '').replace(/[\s()+-]/g, '').replace(/^91(?=[6-9]\d{9}$)/, '');
+        if (!/^[6-9]\d{9}$/.test(digits) || !/^\d{6}$/.test(code ?? '')) {
+          throw new Error(`OTP_TEST_ACCOUNTS entry "${entry}" must look like 9755430166:123456`);
+        }
+        return [`+91${digits}`, code];
+      }),
+    ),
   },
 
 

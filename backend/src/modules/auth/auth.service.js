@@ -5,7 +5,7 @@ import { env } from '../../config/env.js';
 import { signAccessToken } from '../../common/auth.js';
 import { badRequest, conflict, forbidden, notFound, tooMany, unauthorized } from '../../common/errors.js';
 import { verifyIdToken } from '../../integrations/identity.js';
-import { deliverOtp, exposesDevCode, fixedDevCode } from '../../integrations/otp.js';
+import { deliverOtp, exposesDevCode, fixedDevCode, testAccountCode } from '../../integrations/otp.js';
 import { saveFile, sniff } from '../files/file.routes.js';
 import { Pet } from '../pets/pet.model.js';
 import { resolveCity } from '../platform/platform.service.js';
@@ -50,7 +50,8 @@ export async function requestOtp({ kind, target, channel = kind === 'email' ? 'e
   const sentLastHour = await OtpSend.countDocuments({ target, createdAt: { $gt: new Date(Date.now() - 3_600_000) } });
   if (sentLastHour >= env.otp.maxSendsPerHour) throw tooMany('Too many codes requested. Please try again in an hour');
 
-  const code = fixedDevCode() ?? String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  const testCode = testAccountCode(target);
+  const code = testCode ?? fixedDevCode() ?? String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
   await OtpChallenge.deleteMany({ target });
   await OtpChallenge.create({
     channel,
@@ -60,7 +61,8 @@ export async function requestOtp({ kind, target, channel = kind === 'email' ? 'e
     expiresAt: new Date(Date.now() + env.otp.ttlSeconds * 1000),
   });
   await OtpSend.create({ target });
-  await deliverOtp({ channel, target, code, appHash });
+  // Test numbers are not real phones: their code is known, so nothing is sent.
+  if (!testCode) await deliverOtp({ channel, target, code, appHash });
 
   return {
     channel,
