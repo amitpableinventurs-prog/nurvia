@@ -18,10 +18,10 @@ export function DuoIcon({ icon: Icon, tone = 'green', size = 40, iconSize, tilt 
 }
 
 // The Nurvia mark: a paw built from five soft shapes, with an orange heart-shaped main pad.
-export function NurviaMark({ size = 34 }) {
+export function NurviaMark({ size = 34, color = '#ff7a45' }) {
   return (
     <svg width={size} height={size} viewBox="0 0 40 40" aria-hidden="true">
-      <rect width="40" height="40" rx="12" fill="#ff7a45" />
+      <rect width="40" height="40" rx="12" fill={color} />
       <g fill="#fff8f0">
         <ellipse cx="11.5" cy="16" rx="3.2" ry="4.2" transform="rotate(-18 11.5 16)" />
         <ellipse cx="17" cy="10.5" rx="3.2" ry="4.4" transform="rotate(-6 17 10.5)" />

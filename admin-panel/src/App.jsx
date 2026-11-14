@@ -1,4 +1,4 @@
-import { Activity, CalendarHeart, GalleryHorizontal, LayoutDashboard, MapPinned, LogOut, Megaphone, Moon, ScrollText, Shapes, ShieldCheck, Siren, Store, Sun, SunMoon, TicketPercent, Users } from 'lucide-react';
+import { Activity, CalendarHeart, GalleryHorizontal, LayoutDashboard, MapPinned, Megaphone, ScrollText, Shapes, ShieldCheck, Siren, Store, TicketPercent, Users } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { NurviaMark } from './icons.jsx';
@@ -24,54 +24,54 @@ const VendorDetail = lazy(() => import('./pages/VendorDetail.jsx'));
 const Vendors = lazy(() => import('./pages/Vendors.jsx'));
 
 // Each screen is shown only to staff holding its permission; the API enforces the same rule.
-// `tone` tints the duotone icon on the dark rail; `count` reads a live queue size from /admin/badges.
+// `count` reads a live queue size from /admin/badges; `tone` colours that count (`crit` also colours the label).
 const NAV = [
-  { section: 'Overview' },
-  { to: '/', label: 'Overview', icon: LayoutDashboard, tone: '#7fd8ac', permission: 'analytics.read', element: <Overview /> },
-  { to: '/analytics', label: 'Analytics', icon: Activity, tone: '#8cc0f5', permission: 'analytics.read', element: <Dashboard /> },
+  { section: 'Administration scope' },
+  { to: '/', label: 'Overview', icon: LayoutDashboard, permission: 'analytics.read', element: <Overview /> },
+  { to: '/analytics', label: 'Analytics', icon: Activity, permission: 'analytics.read', element: <Dashboard /> },
   { section: 'Operations' },
-  { to: '/vendors', label: 'Vendors', icon: Store, tone: '#ffd36b', permission: 'vendors.read', element: <Vendors />, count: (d) => d.vendors.awaitingApproval },
-  { to: '/customers', label: 'Customers', icon: Users, tone: '#7fd8ac', permission: 'users.read', element: <Customers /> },
-  { to: '/bookings', label: 'Bookings', icon: CalendarHeart, tone: '#ffab80', permission: 'bookings.read', element: <Bookings /> },
+  { to: '/vendors', label: 'Vendor verification', icon: Store, permission: 'vendors.read', element: <Vendors />, count: (d) => d.vendors.awaitingApproval, tone: 'warn' },
+  { to: '/customers', label: 'Customers', icon: Users, permission: 'users.read', element: <Customers /> },
+  { to: '/bookings', label: 'Bookings & payments', icon: CalendarHeart, permission: 'bookings.read', element: <Bookings /> },
   { section: 'Trust & safety' },
-  { to: '/moderation', label: 'Moderation', icon: ShieldCheck, tone: '#7fd6cf', permission: 'content.moderate', element: <Moderation />, count: (d) => d.adoption.awaitingReview },
-  { to: '/reports', label: 'Reports', icon: Siren, tone: '#ff9fba', permission: 'reports.manage', element: <Reports />, count: (d) => d.reports.open },
+  { to: '/moderation', label: 'Moderation', icon: ShieldCheck, permission: 'content.moderate', element: <Moderation />, count: (d) => d.adoption.awaitingReview, tone: 'warn' },
+  { to: '/reports', label: 'Safety reports', icon: Siren, permission: 'reports.manage', element: <Reports />, count: (d) => d.reports.open, tone: 'crit' },
   { section: 'Marketing' },
-  { to: '/banners', label: 'Banners', icon: GalleryHorizontal, tone: '#ffd36b', permission: 'marketing.manage', element: <Banners /> },
-  { to: '/coupons', label: 'Discounts & coupons', icon: TicketPercent, tone: '#ff9fba', permission: 'marketing.manage', element: <Coupons /> },
+  { to: '/banners', label: 'Banners', icon: GalleryHorizontal, permission: 'marketing.manage', element: <Banners /> },
+  { to: '/coupons', label: 'Discounts & coupons', icon: TicketPercent, permission: 'marketing.manage', element: <Coupons /> },
   { section: 'Platform' },
-  { to: '/platform', label: 'Cities & features', icon: MapPinned, tone: '#7fd6cf', permission: 'analytics.read', element: <Platform /> },
-  { to: '/categories', label: 'Categories', icon: Shapes, tone: '#8cc0f5', permission: 'vendors.read', element: <Categories /> },
-  { to: '/announcements', label: 'Announcements', icon: Megaphone, tone: '#ffab80', permission: 'announcements.send', element: <Announcements /> },
-  { to: '/audit', label: 'Audit log', icon: ScrollText, tone: '#d2d8d3', permission: 'audit.read', element: <AuditLog /> },
+  { to: '/platform', label: 'Cities & features', icon: MapPinned, permission: 'analytics.read', element: <Platform /> },
+  { to: '/categories', label: 'Categories', icon: Shapes, permission: 'vendors.read', element: <Categories /> },
+  { to: '/announcements', label: 'Announcements', icon: Megaphone, permission: 'announcements.send', element: <Announcements /> },
+  { to: '/audit', label: 'System audit log', icon: ScrollText, permission: 'audit.read', element: <AuditLog /> },
 ];
 
-const THEMES = [
-  ['system', 'System', SunMoon],
-  ['light', 'Light', Sun],
-  ['dark', 'Dark', Moon],
-];
-
-function useTheme() {
-  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') ?? 'system');
-  const next = () => {
-    const value = THEMES[(THEMES.findIndex(([k]) => k === theme) + 1) % THEMES.length][0];
-    if (value === 'system') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', value);
-    try {
-      localStorage.setItem('nurvia.admin.theme', value);
-    } catch {
-      /* storage unavailable: lasts for this visit only */
-    }
-    setTheme(value);
-  };
-  return [theme, next];
+// Which API instance and database this panel is talking to.
+function InstanceCard() {
+  const { data } = useApi('/admin/system/status');
+  if (!data) return null;
+  const db = data.database;
+  return (
+    <div className="instance small">
+      <div className="instance-head">
+        <span>Instance node</span>
+        <span className="mono">{data.node}</span>
+      </div>
+      <div>
+        Database:{' '}
+        <strong className={db.status === 'ok' ? '' : 'ov-crit'}>{db.status === 'ok' ? `${db.name} · ${db.replicaSet ? 'replica set' : 'standalone'}` : 'unreachable'}</strong>
+      </div>
+      <div>
+        Environment: <strong>{data.environment}</strong>
+      </div>
+      <div className="instance-foot">Release {data.release}</div>
+    </div>
+  );
 }
 
 function Sidebar() {
-  const { session, logout, can } = useSession();
+  const { can } = useSession();
   const { pathname } = useLocation();
-  const [theme, nextTheme] = useTheme();
   // Refreshed on navigation so badges drop as soon as a queue item is handled.
   const { data: counts } = useApi('/admin/badges', { _: pathname }, { enabled: can('analytics.read') });
 
@@ -83,51 +83,23 @@ function Sidebar() {
     }
     return can(n.permission);
   });
-  const role = session.user.roles.find((r) => ['super_admin', 'admin', 'staff'].includes(r))?.replace('_', ' ');
-  const [, themeLabel, ThemeIcon] = THEMES.find(([k]) => k === theme);
-  const name = session.user.name ?? session.user.email;
 
   return (
     <nav className="sidebar" aria-label="Main">
-      <div className="brand">
-        <NurviaMark />
-        <div>
-          <div className="brand-name">nurvia</div>
-          <div className="brand-sub">Admin console</div>
-        </div>
-      </div>
       {items.map((n) =>
         n.section ? (
           <div key={n.section} className="nav-section">
             {n.section}
           </div>
         ) : (
-          <NavLink key={n.to} to={n.to} end={n.to === '/'} className="nav-link" style={{ '--nav-tone': n.tone }}>
-            <span className="nav-ico">
-              <n.icon size={17} strokeWidth={1.9} />
-            </span>
+          <NavLink key={n.to} to={n.to} end={n.to === '/'} className={`nav-link ${n.tone === 'crit' ? 'crit' : ''}`}>
+            <n.icon size={18} strokeWidth={1.8} />
             {n.label}
-            {counts && n.count?.(counts) > 0 && <span className="count">{n.count(counts)}</span>}
+            {counts && n.count?.(counts) > 0 && <span className={`count ${n.tone ?? ''}`}>{n.count(counts)}</span>}
           </NavLink>
         ),
       )}
-      <div className="sidebar-foot">
-        <div className="me">
-          <span className="me-avatar">{name.slice(0, 1).toUpperCase()}</span>
-          <div style={{ minWidth: 0 }}>
-            <div className="me-name">{name}</div>
-            <div className="me-role">{role}</div>
-          </div>
-        </div>
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <button className="side-btn" onClick={nextTheme} title="Change theme">
-            <ThemeIcon size={15} /> {themeLabel}
-          </button>
-          <button className="side-btn" onClick={logout}>
-            <LogOut size={15} /> Sign out
-          </button>
-        </div>
-      </div>
+      <div className="sidebar-foot">{can('analytics.read') && <InstanceCard />}</div>
     </nav>
   );
 }
@@ -146,9 +118,9 @@ export default function App() {
   const pages = NAV.filter((n) => n.to && can(n.permission));
   return (
     <div className="shell">
+      <Topbar />
       <Sidebar />
       <main className="main">
-        <Topbar />
         <Suspense fallback={<div className="empty">Loading…</div>}>
           <Routes>
             {pages.map((n) => (
@@ -188,10 +160,10 @@ function Login() {
     <div className="login">
       <form className="card" onSubmit={submit}>
         <div className="row" style={{ gap: 12, marginBottom: 6 }}>
-          <NurviaMark size={44} />
+          <NurviaMark size={44} color="var(--brand)" />
           <div>
-            <div className="brand-name" style={{ color: 'var(--ink)' }}>nurvia</div>
-            <div className="eyebrow">Admin console</div>
+            <div className="brand-name">Nurvia Petcare</div>
+            <div className="eyebrow">Admin portal</div>
           </div>
         </div>
         <h1 style={{ fontSize: 24 }}>

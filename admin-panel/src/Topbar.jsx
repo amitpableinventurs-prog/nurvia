@@ -1,7 +1,8 @@
-import { Bell, Search } from 'lucide-react';
+import { Bell, LogOut, Moon, Search, Sun, SunMoon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from './api.js';
+import { NurviaMark } from './icons.jsx';
 import { useSession } from './session.jsx';
 import { ago, useApi } from './ui.jsx';
 
@@ -189,23 +190,80 @@ function Notifications() {
   );
 }
 
-export default function Topbar() {
-  const { session } = useSession();
+const THEMES = [
+  ['system', 'System', SunMoon],
+  ['light', 'Light', Sun],
+  ['dark', 'Dark', Moon],
+];
+
+function useTheme() {
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') ?? 'system');
+  const next = () => {
+    const value = THEMES[(THEMES.findIndex(([k]) => k === theme) + 1) % THEMES.length][0];
+    if (value === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', value);
+    try {
+      localStorage.setItem('nurvia.admin.theme', value);
+    } catch {
+      /* storage unavailable: lasts for this visit only */
+    }
+    setTheme(value);
+  };
+  return [theme, next];
+}
+
+// The signed-in staff member: name, role, theme and sign out.
+function AccountMenu() {
+  const { session, logout } = useSession();
+  const [theme, nextTheme] = useTheme();
+  const [open, setOpen] = useState(false);
   const name = session.user.name ?? session.user.email;
+  const role = session.user.roles.find((r) => ['super_admin', 'admin', 'staff'].includes(r))?.replace('_', ' ');
+  const [, themeLabel, ThemeIcon] = THEMES.find(([k]) => k === theme);
+  const initials = name
+    .split(' ')
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+  return (
+    <div className="tb-bell" onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setOpen(false)}>
+      <button className="tb-me" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={`Account: ${name}`} title={name}>
+        {initials}
+      </button>
+      {open && (
+        <div className="tb-pop right tb-menu">
+          <div className="tb-menu-head">
+            <strong className="tb-title">{name}</strong>
+            {role && <span className="small muted" style={{ textTransform: 'capitalize' }}>{role}</span>}
+          </div>
+          <button className="tb-menu-item" onClick={nextTheme}>
+            <ThemeIcon size={15} /> Theme: {themeLabel}
+          </button>
+          <button className="tb-menu-item" onClick={logout}>
+            <LogOut size={15} /> Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Topbar() {
   return (
     <header className="topbar">
+      <div className="tb-brand">
+        <NurviaMark size={32} />
+        <div>
+          <div className="brand-name">Nurvia Petcare</div>
+          <div className="brand-sub">Admin portal</div>
+        </div>
+      </div>
       <GlobalSearch />
-      <div className="row" style={{ gap: 12, marginLeft: 'auto' }}>
+      <div className="row tb-actions">
         <SystemPill />
         <Notifications />
-        <span className="tb-me" title={name} aria-hidden="true">
-          {name
-            .split(' ')
-            .map((w) => w[0])
-            .slice(0, 2)
-            .join('')
-            .toUpperCase()}
-        </span>
+        <AccountMenu />
       </div>
     </header>
   );
