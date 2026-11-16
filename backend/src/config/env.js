@@ -66,6 +66,14 @@ export const env = {
   },
 
 
+  // OTP_PROVIDER=twilio: Twilio Verify, authenticated with an API key (not the account auth token).
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID,
+    apiKeySid: process.env.TWILIO_API_KEY_SID,
+    apiKeySecret: process.env.TWILIO_API_KEY_SECRET,
+    verifyServiceSid: process.env.TWILIO_VERIFY_SERVICE_SID,
+  },
+
   // Sign in with Google / Apple: the OAuth client IDs whose ID tokens are accepted (web, Android, iOS).
   // A provider with no client IDs is switched off.
   oauth: {

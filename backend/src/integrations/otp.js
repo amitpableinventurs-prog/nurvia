@@ -1,19 +1,17 @@
 import { env } from '../config/env.js';
-import { unavailable } from '../common/errors.js';
+import { badRequest, tooMany, unavailable } from '../common/errors.js';
 
-// Delivery adapter for OTP codes. Nurvia has not chosen an Indian SMS/OTP provider yet
-// (MSG91, Gupshup, Twilio Verify etc.); add it as a case here once credentials exist.
-// DLT template registration is required for SMS in India before go-live, and the registered
-// template must match buildOtpMessage() below. WhatsApp needs an approved authentication template.
+// Delivery adapter for OTP codes.
+//   console: logs the code (development); the API also returns it as devCode.
+//   twilio:  Twilio Verify sends phone codes by SMS, WhatsApp or a voice call, and checks them.
+//            Twilio generates the code, which keeps Indian SMS within its DLT-registered templates.
+// Email codes are not sent by Twilio Verify yet; they are logged as with the console provider.
+export const providerChecksCode = (channel) => env.otp.provider === 'twilio' && channel !== 'email';
+
 export async function deliverOtp({ channel, target, code, appHash }) {
-  const message = buildOtpMessage({ channel, code, appHash });
-  switch (env.otp.provider) {
-    case 'console':
-      if (env.nodeEnv !== 'test') console.info(`[otp:${channel}] ${target}\n${message}`);
-      return;
-    default:
-      throw unavailable(`OTP provider "${env.otp.provider}" is not configured`);
-  }
+  if (providerChecksCode(channel)) return startTwilioVerification({ channel, target, appHash });
+  if (env.otp.provider !== 'console' && channel !== 'email') throw unavailable(`OTP provider "${env.otp.provider}" is not configured`);
+  if (env.nodeEnv !== 'test') console.info(`[otp:${channel}] ${target}\n${buildOtpMessage({ channel, code, appHash })}`);
 }
 
 const minutes = () => Math.round(env.otp.ttlSeconds / 60);
@@ -47,3 +45,51 @@ export const fixedDevCode = () => (exposesDevCode() ? env.otp.fixedCode : undefi
 
 // The fixed code of an OTP_TEST_ACCOUNTS number (any environment), or undefined.
 export const testAccountCode = (target) => env.otp.testAccounts.get(target);
+
+/* ───────────── Twilio Verify ───────────── */
+
+const TWILIO_CHANNELS = { sms: 'sms', whatsapp: 'whatsapp', voice: 'call' };
+
+async function twilio(path, params) {
+  const { accountSid, apiKeySid, apiKeySecret, verifyServiceSid } = env.twilio;
+  if (!accountSid || !apiKeySid || !apiKeySecret || !verifyServiceSid) throw unavailable('Twilio Verify is not configured');
+  let res;
+  try {
+    res = await fetch(`https://verify.twilio.com/v2/Services/${verifyServiceSid}/${path}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${apiKeySid}:${apiKeySecret}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(params),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    throw unavailable('Could not reach the SMS provider. Please try again');
+  }
+  const body = await res.json().catch(() => ({}));
+  return { status: res.status, body };
+}
+
+async function startTwilioVerification({ channel, target, appHash }) {
+  const { status, body } = await twilio('Verifications', { To: target, Channel: TWILIO_CHANNELS[channel], ...(appHash && { AppHash: appHash }) });
+  if (status < 300) return;
+  console.warn(`[otp:twilio] send to ${target.slice(0, 6)}… failed: ${status} ${body.code} ${body.message}`);
+  if (status === 429 || body.code === 60203) throw tooMany('Too many codes requested. Please try again later');
+  // 21608: a trial Twilio account can only send to numbers verified in the Twilio console.
+  if (body.code === 21608) throw badRequest('This number cannot receive codes yet (Twilio trial account)');
+  if (status === 400) throw badRequest(`Codes cannot be sent to this number by ${channel}`);
+  throw unavailable('The SMS provider could not send the code. Please try again');
+}
+
+// True when Twilio accepts the code. Twilio forgets a verification once it is approved, expired
+// or out of attempts; that answers 404, which counts as a wrong code here.
+export async function checkTwilioCode(target, code) {
+  const { status, body } = await twilio('VerificationCheck', { To: target, Code: code });
+  if (status === 404) return false;
+  if (status >= 300) {
+    console.warn(`[otp:twilio] check failed: ${status} ${body.code} ${body.message}`);
+    throw unavailable('Could not check the code. Please try again');
+  }
+  return body.status === 'approved';
+}

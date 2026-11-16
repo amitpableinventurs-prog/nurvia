@@ -13,6 +13,8 @@ export default defineConfig({
       OTP_HASH_SECRET: 'test-otp-secret',
       OTP_RESEND_COOLDOWN_SECONDS: '0',
       OTP_FIXED_CODE: '', // tests need random codes; .env may set one for local testing
+      OTP_PROVIDER: 'console', // .env may name a real SMS provider
+      OTP_PHONE_CHANNELS: 'sms,whatsapp,voice',
       GOOGLE_CLIENT_IDS: 'test-client.apps.googleusercontent.com',
       PAYMENT_GATEWAY: 'mock',
       UPLOAD_DIR: 'storage-test',

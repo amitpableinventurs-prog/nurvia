@@ -238,6 +238,41 @@ describe('sign-in screens', () => {
     }
   });
 
+  it('sends and checks phone codes through Twilio Verify', async () => {
+    const phone = '+919630012349';
+    const calls = [];
+    const fetchMock = vi.fn(async (url, { body }) => {
+      calls.push({ path: new URL(url).pathname, params: Object.fromEntries(body) });
+      const check = url.endsWith('/VerificationCheck');
+      return new Response(JSON.stringify({ status: check && body.get('Code') === '424242' ? 'approved' : 'pending' }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const saved = { provider: env.otp.provider, twilio: env.twilio };
+    env.otp.provider = 'twilio';
+    env.twilio = { accountSid: 'AC1', apiKeySid: 'SK1', apiKeySecret: 'secret', verifyServiceSid: 'VA1' };
+    try {
+      const { body } = await api().post('/auth/otp/request').send({ phone, channel: 'voice' }).expect(200);
+      expect(body.devCode).toBeUndefined();
+      expect(calls[0]).toEqual({ path: '/v2/Services/VA1/Verifications', params: { To: phone, Channel: 'call' } });
+      const wrong = await api().post('/auth/otp/verify').send({ phone, code: '111111' }).expect(401);
+      expect(wrong.body.error.details).toEqual({ attemptsLeft: 4 });
+      const verified = await api().post('/auth/otp/verify').send({ phone, code: '424242' }).expect(200);
+      expect(verified.body.isNew).toBe(true);
+
+      // Test numbers keep their fixed code and are never sent to Twilio.
+      env.otp.testAccounts.set('+919630012350', '123456');
+      fetchMock.mockClear();
+      await api().post('/auth/otp/request').send({ phone: '+919630012350' }).expect(200);
+      await api().post('/auth/otp/verify').send({ phone: '+919630012350', code: '123456' }).expect(200);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      Object.assign(env.otp, { provider: saved.provider });
+      env.twilio = saved.twilio;
+      env.otp.testAccounts.delete('+919630012350');
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('tells the app how many attempts are left', async () => {
     const phone = '+919630012346';
     const { sent } = await verifyNewPhoneRequest(phone);

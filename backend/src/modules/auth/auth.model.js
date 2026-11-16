@@ -5,7 +5,9 @@ const otpChallengeSchema = new mongoose.Schema(
   {
     channel: { type: String, enum: ['sms', 'whatsapp', 'voice', 'email'], required: true },
     target: { type: String, required: true },
-    codeHash: { type: String, required: true },
+    // Absent when the OTP provider (Twilio Verify) generated the code and checks it.
+    codeHash: { type: String, required: function () { return !this.providerChecked; } },
+    providerChecked: { type: Boolean, default: false },
     // signup: verify a new phone before registration. login: verify a registered phone.
     // contact: adding a number or email to a signed-in account; it never signs anyone in.
     purpose: { type: String, enum: ['signup', 'login', 'contact'], default: 'login' },
