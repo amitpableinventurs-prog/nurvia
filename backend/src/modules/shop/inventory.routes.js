@@ -8,6 +8,7 @@ import { Category } from '../categories/category.model.js';
 import { Vendor } from '../vendors/vendor.model.js';
 import { ReturnRequest } from './aftercare.model.js';
 import { changeStock } from './inventory.service.js';
+import { assertPlanFeature, assertWithinPlan } from '../plans/subscription.service.js';
 import { ADJUSTMENT_REASONS, DEFAULT_LOW_STOCK, LIFE_STAGES, MAX_VARIANTS, PET_TYPES, Product, ShopOrder, StockMovement } from './shop.model.js';
 
 // Seller inventory, CSV import and export, and the sales report. Mounted inside the seller router
@@ -20,7 +21,7 @@ const csvBody = { csv: z.string().min(1).max(MAX_CSV_CHARS) };
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 
 async function myVendor(req) {
-  const vendor = await Vendor.findOne({ owner: req.user._id, status: 'active' }).select('_id businessName').lean();
+  const vendor = await Vendor.findOne({ owner: req.user._id, status: 'active' }).select('_id businessName subscription').lean();
   if (!vendor) throw conflict('Your business must be approved before you can sell');
   return vendor;
 }
@@ -214,6 +215,13 @@ sellerInventoryRouter.post('/products/import', validate({ body: csvBody }), asyn
 
   const categories = new Map((await Category.find({ kind: 'product' }).select('slug').lean()).map((c) => [c.slug, c._id]));
   const groups = Map.groupBy(rows, (r) => r.slug.toLowerCase());
+  // New products count against the plan; updating existing ones does not.
+  const known = new Set((await Product.find({ seller: vendor._id, slug: { $in: [...groups.keys()] }, status: { $ne: 'archived' } }).select('slug').lean()).map((p) => p.slug));
+  const adding = [...groups.keys()].filter((slug) => !known.has(slug)).length;
+  if (adding) {
+    await assertPlanFeature(vendor, 'marketplace');
+    await assertWithinPlan(vendor, 'products', adding);
+  }
   const errors = [];
   let created = 0;
   let updated = 0;

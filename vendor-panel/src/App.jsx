@@ -1,4 +1,4 @@
-import { Bell, CalendarHeart, CalendarOff, FileBadge, Heart, LayoutDashboard, LogOut, Moon, Package, Scissors, ShoppingBag, Star, Store, Sun, SunMoon, Undo2, Wallet } from 'lucide-react';
+import { Bell, Boxes, CalendarDays, CalendarHeart, CalendarOff, ChartColumn, CreditCard, FileBadge, ListTodo, Heart, LayoutDashboard, LogOut, Moon, Package, Scissors, ShoppingBag, Star, Store, Sun, SunMoon, Undo2, Wallet } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './api.js';
@@ -10,17 +10,22 @@ import { ago, useApi } from './ui.jsx';
 
 // Screens are downloaded on first visit, so opening the panel loads only the shell.
 const Availability = lazy(() => import('./pages/Availability.jsx'));
+const Billing = lazy(() => import('./pages/Billing.jsx'));
+const Calendar = lazy(() => import('./pages/Calendar.jsx'));
 const BookingDetail = lazy(() => import('./pages/BookingDetail.jsx'));
 const Bookings = lazy(() => import('./pages/Bookings.jsx'));
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
 const Documents = lazy(() => import('./pages/Documents.jsx'));
 const Earnings = lazy(() => import('./pages/Earnings.jsx'));
 const Orders = lazy(() => import('./pages/Orders.jsx'));
+const Packages = lazy(() => import('./pages/Packages.jsx'));
 const Products = lazy(() => import('./pages/Products.jsx'));
 const Profile = lazy(() => import('./pages/Profile.jsx'));
 const Returns = lazy(() => import('./pages/Returns.jsx'));
+const Reports = lazy(() => import('./pages/Reports.jsx'));
 const Reviews = lazy(() => import('./pages/Reviews.jsx'));
 const Services = lazy(() => import('./pages/Services.jsx'));
+const Waitlist = lazy(() => import('./pages/Waitlist.jsx'));
 const Wishlist = lazy(() => import('./pages/Wishlist.jsx'));
 
 // `count` reads a live number from /vendors/me/badges for the sidebar badge.
@@ -28,6 +33,11 @@ const NAV = [
   { section: 'Today' },
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, tone: '#7fd8ac', element: <Dashboard /> },
   { to: '/bookings', label: 'Bookings', icon: CalendarHeart, tone: '#ffab80', element: <Bookings />, count: (d) => d.pending.count },
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, tone: '#7fd6cf', element: <Calendar /> },
+  { section: 'Workspace' },
+  { to: '/waitlist', label: 'Waitlist', icon: ListTodo, tone: '#ffd36b', element: <Waitlist /> },
+  { to: '/packages', label: 'Service packages', icon: Boxes, tone: '#b9adff', element: <Packages /> },
+  { to: '/reports', label: 'Reports', icon: ChartColumn, tone: '#7fd8ac', element: <Reports /> },
   { section: 'Business' },
   { to: '/availability', label: 'Availability', icon: CalendarOff, tone: '#8cc0f5', element: <Availability />, count: (d) => (d.pause ? '!' : 0) },
   { to: '/services', label: 'Services & prices', icon: Scissors, tone: '#b9adff', element: <Services /> },
@@ -41,6 +51,7 @@ const NAV = [
   { section: 'Account' },
   { to: '/profile', label: 'Business profile', icon: Store, tone: '#8cc0f5', element: <Profile /> },
   { to: '/documents', label: 'KYC & licence', icon: FileBadge, tone: '#ff9fba', element: <Documents /> },
+  { to: '/billing', label: 'Plan & billing', icon: CreditCard, tone: '#ffab80', element: <Billing />, count: (d) => (d.plan?.endsInDays != null ? `${d.plan.endsInDays}d` : 0) },
 ];
 
 // Bumps once a minute while the tab is visible, so new booking requests show up without a reload.

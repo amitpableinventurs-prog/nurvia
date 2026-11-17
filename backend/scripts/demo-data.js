@@ -32,7 +32,12 @@ import { CommunityDog, CareLog } from '../src/modules/community-dogs/community-d
 export const DEMO_ADMIN = { email: 'admin@nurvia.local', password: 'nurvia-dev-password' };
 
 export async function seedDemoData() {
-  await Tenant.create({ slug: env.defaultTenant, name: 'Nurvia Petcare' });
+  // business: the supplier on vendor plan invoices. Demo values; set the real ones under Plans & billing.
+  await Tenant.create({
+    slug: env.defaultTenant,
+    name: 'Nurvia Petcare',
+    business: { legalName: 'Nurvia Petcare (demo)', address: '1 Residency Road, Bengaluru, Karnataka 560025', gstin: '29AAACN0000A1Z5', email: 'billing@nurvia.local' },
+  });
   const HOURS = [1, 2, 3, 4, 5, 6].map((day) => ({ day, open: '09:00', close: '19:00' }));
   const day = (offset, hour) => new Date(Date.now() + offset * 86_400_000).setUTCHours(hour - 5, 30, 0, 0);
 
@@ -308,11 +313,32 @@ export async function seedDemoData() {
       );
     }
     await CommissionConfig.create({ bookingPct: 10, marketplacePct: 12, updatedBy: superAdmin._id });
+    // Plans are platform-wide and may already exist.
+    const ignoreExisting = (err) => (err.code === 11000 ? null : Promise.reject(err));
     await Plan.create([
-      { code: 'vendor-starter', name: 'Starter', audience: 'vendor', pricePaise: 0, features: ['Nurvia listing and bookings', 'CRM for up to 200 customers'], limits: { staff: 2, customers: 200 }, sortOrder: 1 },
-      { code: 'vendor-pro', name: 'Pro', audience: 'vendor', pricePaise: 149900, trialDays: 14, features: ['Unlimited customers', 'Staff calendar for 10', 'Packages and reports'], limits: { staff: 10 }, sortOrder: 2 },
-      { code: 'store-white-label', name: 'White-label store', audience: 'tenant', pricePaise: 499900, features: ['Branded storefront', 'Own catalogue and orders', 'Optional Nurvia listing'], sortOrder: 1 },
-    ]).catch((err) => (err.code === 11000 ? null : Promise.reject(err))); // plans are platform-wide and may already exist
+      {
+        code: 'vendor-free', name: 'Free', audience: 'vendor', isFree: true, monthlyPricePaise: 0, yearlyPricePaise: 0, sortOrder: 0,
+        highlights: ['Nurvia listing and bookings', 'Sell up to 10 products', 'Calendar, appointments and reports'],
+        features: ['marketplace'], limits: { staff: 1, services: 5, products: 10, customers: 100 },
+      },
+      {
+        code: 'vendor-starter', name: 'Starter', audience: 'vendor', monthlyPricePaise: 49900, yearlyPricePaise: 499000, sortOrder: 1,
+        highlights: ['3 staff seats', 'CRM with follow-up reminders', 'Sell service packages'],
+        features: ['crm', 'marketplace', 'packages'], limits: { staff: 3, services: 20, products: 100, customers: 1000 },
+      },
+      {
+        code: 'vendor-pro', name: 'Pro', audience: 'vendor', monthlyPricePaise: 149900, yearlyPricePaise: 1499000, sortOrder: 2,
+        highlights: ['Unlimited staff, services and customers', 'Visit records shared with pet owners', 'Sell products in the Nurvia shop'],
+        features: ['crm', 'visit_records', 'marketplace', 'packages'], limits: {},
+      },
+      {
+        code: 'store-white-label', name: 'White-label store', audience: 'tenant', monthlyPricePaise: 499900, yearlyPricePaise: 4999000, sortOrder: 1,
+        highlights: ['Branded storefront', 'Own catalogue and orders', 'Optional Nurvia listing'],
+      },
+    ]).catch(ignoreExisting);
+    // Happy Paws is on Pro until 6 days from now, so the renewal reminder and Plan & billing have something to show.
+    const pro = await Plan.findOne({ code: 'vendor-pro' }).lean();
+    await Vendor.updateOne({ _id: clinic._id }, { subscription: { plan: pro._id, status: 'active', source: 'staff', startedAt: daysAgo(24), expiresAt: new Date(Date.now() + 6 * 86_400_000), remindersSent: [] } });
 
     // Happy Paws has one team member per staff role (sign in with 9845000020-26) and a walk-in customer from outside Nurvia.
     const team = [

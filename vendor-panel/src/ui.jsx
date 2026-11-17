@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from './api.js';
 
 // Loads `path` with `params`, reloading whenever either changes. Pass { enabled: false } to skip.
@@ -28,7 +29,13 @@ export function ErrorNote({ error }) {
   return (
     <div className="error" role="alert">
       {error.message}
-      {error.details?.length > 0 && (
+      {error.status === 402 && (
+        <>
+          {' '}
+          <Link to="/billing">See plans</Link>
+        </>
+      )}
+      {Array.isArray(error.details) && error.details.length > 0 && (
         <ul className="small">
           {error.details.map((d) => (
             <li key={d.path + d.message}>

@@ -78,7 +78,15 @@ export function createApp() {
   }
   // Outside production the API is also opened over plain HTTP on the machine's Wi-Fi address, where
   // upgrade-insecure-requests would send the panels' own scripts to https and break them.
-  const csp = { directives: { upgradeInsecureRequests: env.isProd ? [] : null } };
+  // Razorpay Checkout (vendors paying for a plan in the partner panel) loads its script and opens its frame.
+  const csp = {
+    directives: {
+      upgradeInsecureRequests: env.isProd ? [] : null,
+      scriptSrc: ["'self'", 'https://checkout.razorpay.com'],
+      frameSrc: ["'self'", 'https://api.razorpay.com', 'https://checkout.razorpay.com'],
+      connectSrc: ["'self'", 'https://*.razorpay.com'],
+    },
+  };
   app.use(helmet({ contentSecurityPolicy: csp, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   // Outside production the API is also called from origins nobody lists ahead of time: Flutter web on
   // localhost (a new port on every run) and apps opened from another device by a Wi-Fi address.

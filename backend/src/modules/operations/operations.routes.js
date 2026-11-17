@@ -5,7 +5,8 @@ import { authenticate } from '../../common/auth.js';
 import { badRequest, conflict, forbidden, notFound } from '../../common/errors.js';
 import { paginate } from '../../common/paginate.js';
 import { ROLES } from '../../common/roles.js';
-import { addMinutes } from '../../common/time.js';
+import { sendCsv } from '../../common/csv.js';
+import { addMinutes, localParts } from '../../common/time.js';
 import { escapeRegex, objectId, pageQuery, partialShape, validate } from '../../common/validate.js';
 import { Booking } from '../bookings/booking.model.js';
 import { bookingIdFromCheckIn, checkIn, passportShare } from '../bookings/booking.service.js';
@@ -33,7 +34,7 @@ import {
   VisitReport,
   WaitlistEntry,
 } from './operations.model.js';
-import { assertWithinPlan } from '../plans/plan.routes.js';
+import { assertWithinPlan, requirePlanFeature } from '../plans/plan.routes.js';
 import { recordVisit, requireCapability, vendorWorkspace } from './operations.service.js';
 
 // The vendor's business workspace (Phase 2 vendor SaaS), mounted at /vendors/me. The business owner
@@ -41,6 +42,17 @@ import { recordVisit, requireCapability, vendorWorkspace } from './operations.se
 const router = Router();
 const PATHS = ['/workspace', '/staff', '/customers', '/notes', '/follow-ups', '/appointments', '/calendar', '/waitlist', '/packages', '/visits', '/reports', '/bookings'];
 router.use(PATHS, ...vendorWorkspace);
+
+// Plan features (plans/plan.model.js). Without one, what the business already has stays readable,
+// but nothing new can be added; follow-ups are a CRM screen in themselves.
+const planGate = (feature, { reads = false } = {}) => {
+  const check = requirePlanFeature(feature);
+  return (req, res, next) => (req.method === 'GET' && !reads ? next() : check(req, res, next));
+};
+router.use('/visits', planGate('visit_records'));
+router.use('/packages', planGate('packages'));
+router.use('/notes', planGate('crm'));
+router.use('/follow-ups', planGate('crm', { reads: true }));
 
 const can = (capability) => requireCapability(capability);
 const phone = z.string().transform((s) => s.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\+91[6-9]\d{9}$/, 'Phone must be +91XXXXXXXXXX'));
@@ -119,6 +131,7 @@ router.patch(
   validate({ body: { ...partialShape(staffBody), phone: z.never().optional(), active: z.boolean().optional() } }),
   async (req, res) => {
     const staff = await own(VendorStaff, req.valid.params.id, req, 'Staff member');
+    if (req.valid.body.active && !staff.active) await assertWithinPlan(req.vendor, 'staff');
     staff.set(req.valid.body);
     res.json(await staff.save());
   },
@@ -234,7 +247,7 @@ router.patch(
 
 const noteBody = { text: z.string().trim().min(1).max(2000), petId: objectId.optional(), followUpAt: z.coerce.date().optional() };
 
-router.post('/customers/:id/notes', can('customers.read'), validate({ body: noteBody }), async (req, res) => {
+router.post('/customers/:id/notes', can('customers.read'), requirePlanFeature('crm'), validate({ body: noteBody }), async (req, res) => {
   const customer = await own(VendorCustomer, req.valid.params.id, req, 'Customer');
   res.status(201).json(await CrmNote.create({ ...req.valid.body, vendor: req.vendor._id, customer: customer._id, author: req.user._id }));
 });
@@ -576,7 +589,7 @@ router.patch('/packages/:id', can('services.manage'), validate({ body: partialSh
   res.json(await pkg.save());
 });
 
-router.post('/customers/:id/packages', can('bookings.manage'), validate({ body: { packageId: objectId, paidOffline: z.boolean().optional() } }), async (req, res) => {
+router.post('/customers/:id/packages', can('bookings.manage'), requirePlanFeature('packages'), validate({ body: { packageId: objectId, paidOffline: z.boolean().optional() } }), async (req, res) => {
   const customer = await own(VendorCustomer, req.valid.params.id, req, 'Customer');
   const pkg = await ServicePackage.findOne({ _id: req.valid.body.packageId, vendor: req.vendor._id, active: true });
   if (!pkg) throw notFound('Package');
@@ -855,9 +868,116 @@ router.post('/visits/:id/share', can('visits.write'), validate(), async (req, re
 
 // ---- Reports ----
 
+const MAX_REPORT_DAYS = 366;
+const MAX_REPORT_ROWS = 20_000;
+const OPEN_STATUSES = ['pending', 'accepted', 'scheduled', 'confirmed', 'checked_in'];
+
+function checkReportRange({ from, to }) {
+  if (to <= from) throw badRequest('"to" must be after "from"');
+  if (to - from > MAX_REPORT_DAYS * 86_400_000) throw badRequest(`Ask for at most ${MAX_REPORT_DAYS} days at a time`);
+}
+
+// Every Nurvia booking and own appointment scheduled in the range, as one list. A customer is the
+// Nurvia account when there is one, so a pet parent who books online and also as a walk-in counts once.
+async function visitRows(vendorId, from, to) {
+  const window = { vendor: vendorId, scheduledAt: { $gte: from, $lt: to } };
+  const [bookings, appointments] = await Promise.all([
+    Booking.find(window)
+      .sort({ scheduledAt: 1 })
+      .limit(MAX_REPORT_ROWS)
+      .select('code user pet serviceSnapshot scheduledAt status assignedStaff payment.status')
+      .populate('user', 'name phone')
+      .populate('pet', 'name')
+      .populate('assignedStaff', 'name')
+      .lean(),
+    Appointment.find(window)
+      .sort({ scheduledAt: 1 })
+      .limit(MAX_REPORT_ROWS)
+      .select('customer petName serviceName pricePaise scheduledAt status staff customerPackage paidOffline')
+      .populate('customer', 'name phone user')
+      .populate('staff', 'name')
+      .lean(),
+  ]);
+  const rows = [
+    ...bookings.map((b) => ({
+      source: 'nurvia',
+      reference: b.code,
+      at: b.scheduledAt,
+      status: b.status,
+      customerKey: b.user ? `u:${b.user._id}` : `b:${b._id}`,
+      customer: b.user?.name || 'Nurvia customer',
+      phone: b.user?.phone,
+      pet: b.pet?.name,
+      service: b.serviceSnapshot?.name || 'Service',
+      staff: b.assignedStaff?.name,
+      valuePaise: b.serviceSnapshot?.pricePaise ?? 0,
+      payment: b.payment?.status,
+    })),
+    ...appointments.map((a) => ({
+      source: 'own',
+      reference: '',
+      at: a.scheduledAt,
+      status: a.status,
+      customerKey: a.customer?.user ? `u:${a.customer.user}` : `c:${a.customer?._id ?? a._id}`,
+      customer: a.customer?.name || 'Customer',
+      phone: a.customer?.phone,
+      pet: a.petName,
+      service: a.serviceName,
+      staff: a.staff?.name,
+      // Sessions from a package were paid for when the package was sold.
+      valuePaise: a.customerPackage ? 0 : a.pricePaise ?? 0,
+      payment: a.customerPackage ? 'package' : a.paidOffline ? 'paid_offline' : '',
+    })),
+  ].sort((x, y) => x.at - y.at);
+  return { rows, truncated: bookings.length === MAX_REPORT_ROWS || appointments.length === MAX_REPORT_ROWS };
+}
+
+const pct = (part, whole) => (whole ? Math.round((part / whole) * 1000) / 10 : 0);
+
+// Bookings, revenue, top services, repeat customers and no-shows from the rows above.
+function reportInsights(rows, packagesPaise) {
+  const completed = rows.filter((r) => r.status === 'completed');
+  const noShows = rows.filter((r) => r.status === 'no_show');
+  const services = new Map();
+  const customers = new Map();
+  for (const r of completed) {
+    const s = services.get(r.service) ?? { name: r.service, count: 0, valuePaise: 0, nurvia: 0, own: 0 };
+    s.count++;
+    s.valuePaise += r.valuePaise;
+    s[r.source]++;
+    services.set(r.service, s);
+    const c = customers.get(r.customerKey) ?? { name: r.customer, phone: r.phone, visits: 0, valuePaise: 0, firstAt: r.at, lastAt: r.at };
+    c.visits++;
+    c.valuePaise += r.valuePaise;
+    c.lastAt = r.at;
+    customers.set(r.customerKey, c);
+  }
+  const noShowCounts = new Map();
+  for (const r of noShows) noShowCounts.set(r.customerKey, (noShowCounts.get(r.customerKey) ?? 0) + 1);
+  const customerList = [...customers.entries()].map(([key, c]) => ({ ...c, noShows: noShowCounts.get(key) ?? 0 })).sort((a, b) => b.visits - a.visits || b.valuePaise - a.valuePaise);
+  const repeat = customerList.filter((c) => c.visits >= 2);
+  const visitsPaise = completed.reduce((sum, r) => sum + r.valuePaise, 0);
+  return {
+    summary: {
+      bookings: rows.length,
+      completed: completed.length,
+      cancelled: rows.filter((r) => r.status === 'cancelled' || r.status === 'rejected').length,
+      noShows: noShows.length,
+      upcoming: rows.filter((r) => OPEN_STATUSES.includes(r.status)).length,
+    },
+    revenue: { visitsPaise, packagesPaise, totalPaise: visitsPaise + packagesPaise },
+    services: [...services.values()].sort((a, b) => b.count - a.count || b.valuePaise - a.valuePaise),
+    customers: customerList,
+    repeat,
+    noShows,
+    rates: { repeatPct: pct(repeat.length, customerList.length), noShowPct: pct(noShows.length, completed.length + noShows.length) },
+  };
+}
+
+// Revenue is the value of completed visits plus packages sold; online payments are listed separately.
 router.get('/reports', can('reports.read'), validate({ query: dateRange }), async (req, res) => {
   const { from, to } = req.valid.query;
-  if (to <= from) throw badRequest('"to" must be after "from"');
+  checkReportRange({ from, to });
   const vendor = req.vendor._id;
   const inRange = { vendor, scheduledAt: { $gte: from, $lt: to } };
   const [bookingsByStatus, bookingRevenue, bookingsByService, appointmentsByStatus, appointmentRevenue, byStaff, packageSales, newCustomers] = await Promise.all([
@@ -882,6 +1002,8 @@ router.get('/reports', can('reports.read'), validate({ query: dateRange }), asyn
     CustomerPackage.aggregate([{ $match: { vendor, purchasedAt: { $gte: from, $lt: to } } }, { $group: { _id: null, count: { $sum: 1 }, paise: { $sum: '$pricePaise' } } }]),
     VendorCustomer.aggregate([{ $match: { vendor, createdAt: { $gte: from, $lt: to } } }, { $group: { _id: '$source', count: { $sum: 1 } } }]),
   ]);
+  const { rows, truncated } = await visitRows(vendor, from, to);
+  const insight = reportInsights(rows, packageSales[0]?.paise ?? 0);
   const toMap = (rows) => Object.fromEntries(rows.map((r) => [r._id, r.count]));
   res.json({
     from,
@@ -891,8 +1013,98 @@ router.get('/reports', can('reports.read'), validate({ query: dateRange }), asyn
     byStaff: byStaff.map((r) => ({ staff: r.staff, completed: r.completed, valuePaise: r.valuePaise })),
     packages: { sold: packageSales[0]?.count ?? 0, valuePaise: packageSales[0]?.paise ?? 0 },
     newCustomers: toMap(newCustomers),
+    summary: insight.summary,
+    revenue: insight.revenue,
+    topServices: insight.services.slice(0, 10),
+    customers: { unique: insight.customers.length, repeat: insight.repeat.length, repeatPct: insight.rates.repeatPct, topRepeat: insight.repeat.slice(0, 10) },
+    noShows: {
+      count: insight.noShows.length,
+      ratePct: insight.rates.noShowPct,
+      items: insight.noShows.slice(-50).reverse().map(({ customerKey, valuePaise, payment, ...r }) => r),
+    },
+    truncated,
   });
 });
+
+// The same report as CSV: every booking, services, customers, or no-shows.
+const istStamp = (date) => {
+  const { date: day, minutes } = localParts(date);
+  return `${day} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+};
+const rupees = (paise) => (paise / 100).toFixed(2);
+const sourceLabel = (r) => (r.source === 'nurvia' ? 'Nurvia booking' : 'Own appointment');
+const EXPORTS = {
+  bookings: {
+    rows: (r) => r.rows,
+    columns: [
+      { label: 'Date & time (IST)', value: (r) => istStamp(r.at) },
+      { label: 'Source', value: sourceLabel },
+      { label: 'Booking code', value: 'reference' },
+      { label: 'Customer', value: 'customer' },
+      { label: 'Phone', value: 'phone' },
+      { label: 'Pet', value: 'pet' },
+      { label: 'Service', value: 'service' },
+      { label: 'Staff', value: 'staff' },
+      { label: 'Status', value: 'status' },
+      { label: 'Value (INR)', value: (r) => rupees(r.valuePaise) },
+      { label: 'Payment', value: 'payment' },
+    ],
+  },
+  services: {
+    rows: (r) => r.services,
+    columns: [
+      { label: 'Service', value: 'name' },
+      { label: 'Completed', value: 'count' },
+      { label: 'From Nurvia', value: 'nurvia' },
+      { label: 'Own appointments', value: 'own' },
+      { label: 'Value (INR)', value: (s) => rupees(s.valuePaise) },
+    ],
+  },
+  customers: {
+    rows: (r) => r.customers,
+    columns: [
+      { label: 'Customer', value: 'name' },
+      { label: 'Phone', value: 'phone' },
+      { label: 'Completed visits', value: 'visits' },
+      { label: 'Repeat customer', value: (c) => (c.visits >= 2 ? 'yes' : 'no') },
+      { label: 'No-shows', value: 'noShows' },
+      { label: 'Value (INR)', value: (c) => rupees(c.valuePaise) },
+      { label: 'First visit (IST)', value: (c) => istStamp(c.firstAt) },
+      { label: 'Last visit (IST)', value: (c) => istStamp(c.lastAt) },
+    ],
+  },
+  no_shows: {
+    rows: (r) => r.noShows,
+    columns: [
+      { label: 'Date & time (IST)', value: (r) => istStamp(r.at) },
+      { label: 'Source', value: sourceLabel },
+      { label: 'Booking code', value: 'reference' },
+      { label: 'Customer', value: 'customer' },
+      { label: 'Phone', value: 'phone' },
+      { label: 'Pet', value: 'pet' },
+      { label: 'Service', value: 'service' },
+      { label: 'Staff', value: 'staff' },
+    ],
+  },
+};
+
+router.get(
+  '/reports/export',
+  can('reports.read'),
+  validate({ query: { ...dateRange, kind: z.enum(Object.keys(EXPORTS)).default('bookings') } }),
+  async (req, res) => {
+    const { from, to, kind } = req.valid.query;
+    checkReportRange({ from, to });
+    const [{ rows }, packages] = await Promise.all([
+      visitRows(req.vendor._id, from, to),
+      CustomerPackage.aggregate([{ $match: { vendor: req.vendor._id, purchasedAt: { $gte: from, $lt: to } } }, { $group: { _id: null, paise: { $sum: '$pricePaise' } } }]),
+    ]);
+    const insight = { rows, ...reportInsights(rows, packages[0]?.paise ?? 0) };
+    const { rows: pick, columns } = EXPORTS[kind];
+    const last = localParts(new Date(to.getTime() - 1)).date;
+    sendCsv(res, `nurvia-${kind.replace('_', '-')}-${localParts(from).date}-to-${last}.csv`, columns, pick(insight));
+  },
+);
 
 export default router;
 

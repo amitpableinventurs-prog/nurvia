@@ -51,7 +51,16 @@ router.get('/badges', async (req, res) => {
     Booking.countDocuments({ vendor: vendor._id, status: 'pending', scheduledAt: { $gte: new Date() } }),
     Review.countDocuments({ vendor: vendor._id, status: 'visible', 'vendorReply.text': { $exists: false } }),
   ]);
-  res.json({ vendor: vendorSummary(vendor), pending: { count: pending }, reviews: { unreplied }, pause: vendor.pause?.active ? vendor.pause : null });
+  // A running plan that ends within 7 days, for a reminder on Plan & billing.
+  const sub = vendor.subscription;
+  const planDaysLeft = sub?.status === 'active' && sub.expiresAt ? Math.ceil((new Date(sub.expiresAt) - Date.now()) / DAY) : null;
+  res.json({
+    vendor: vendorSummary(vendor),
+    pending: { count: pending },
+    reviews: { unreplied },
+    pause: vendor.pause?.active ? vendor.pause : null,
+    plan: { endsInDays: planDaysLeft !== null && planDaysLeft >= 0 && planDaysLeft <= 7 ? planDaysLeft : null, expired: sub?.status === 'expired' },
+  });
 });
 
 router.get('/dashboard', async (req, res) => {

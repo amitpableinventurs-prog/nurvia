@@ -113,6 +113,15 @@ export const api = {
     form.append('file', file);
     return send('POST', '/files', form);
   },
+  // Saves an authenticated download (a CSV export) under the server's suggested file name.
+  async download(path, params, fallbackName = 'download') {
+    const res = await send('GET', path + qs(params), undefined, { raw: true });
+    const name = res.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] ?? fallbackName;
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  },
   // Private files (KYC documents) need the bearer token, so they open as a blob URL.
   async openFile(fileId) {
     const res = await send('GET', `/files/${fileId}`, undefined, { raw: true });

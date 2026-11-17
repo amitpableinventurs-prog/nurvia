@@ -17,6 +17,7 @@ import { assertModuleAt, getPlatform, liveCityNames, moduleAvailability } from '
 import { addMinutes, localParts, toMinutes } from '../../common/time.js';
 import { availableSlots, isBlocked, vendorPlace } from './availability.js';
 import { KYC_DOCUMENT_TYPES, STORE_TYPES, SearchLog, Service, Vendor, licenseStatus } from './vendor.model.js';
+import { assertWithinPlan } from '../plans/subscription.service.js';
 
 const router = Router();
 
@@ -238,6 +239,7 @@ router.get('/me/services', authenticate, requireRoles(ROLES.VENDOR), async (req,
 
 router.post('/me/services', authenticate, requireRoles(ROLES.VENDOR), validate({ body: serviceBody }), async (req, res) => {
   const vendor = await myVendor(req);
+  if (req.valid.body.active !== false) await assertWithinPlan(vendor, 'services');
   res.status(201).json(await Service.create({ ...(await serviceFields(req.valid.body)), vendor: vendor._id }));
 });
 
@@ -250,6 +252,7 @@ router.patch(
     const vendor = await myVendor(req);
     const service = await Service.findOne({ _id: req.valid.params.serviceId, vendor: vendor._id });
     if (!service) throw notFound('Service');
+    if (req.valid.body.active && !service.active) await assertWithinPlan(vendor, 'services');
     service.set(await serviceFields(req.valid.body));
     res.json(await service.save());
   },

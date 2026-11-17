@@ -102,8 +102,17 @@ const vendorSchema = new mongoose.Schema(
     // The seller's full bank account number, AES-GCM encrypted (common/crypto.js) and never selected by
     // default. Kept outside `seller` so queries can still exclude the whole seller block.
     sellerBankAccountEnc: { type: String, select: false },
-    // SaaS subscription for the vendor workspace (Phase 2). Billing mechanics are not specified yet.
-    subscription: { plan: { type: ObjectId, ref: 'Plan' }, status: { type: String, enum: ['trial', 'active', 'past_due', 'cancelled'] }, startedAt: Date, renewsAt: Date },
+    // The vendor's paid plan (plans/subscription.service.js). Without one, or once it expires, the
+    // vendor is on the free plan. Bought by the vendor, or assigned or extended by Nurvia staff.
+    subscription: {
+      plan: { type: ObjectId, ref: 'Plan' },
+      status: { type: String, enum: ['active', 'expired'] },
+      source: { type: String, enum: ['purchase', 'staff', 'complimentary'] },
+      startedAt: Date,
+      expiresAt: Date, // none: runs until staff change it
+      expiredAt: Date,
+      remindersSent: [Number], // renewal reminders already sent for this end date, in days before it
+    },
 
     ratingAvg: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
@@ -117,6 +126,7 @@ vendorSchema.index({ tenant: 1, status: 1, 'store.type': 1 });
 vendorSchema.index({ tenant: 1, owner: 1 }, { unique: true });
 vendorSchema.index({ tenant: 1, status: 1, categories: 1 });
 vendorSchema.index({ tenant: 1, status: 1, 'kyc.status': 1, 'kyc.submittedAt': 1 });
+vendorSchema.index({ tenant: 1, 'subscription.status': 1, 'subscription.expiresAt': 1 });
 
 const serviceSchema = new mongoose.Schema(
   {

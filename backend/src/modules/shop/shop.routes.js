@@ -17,6 +17,7 @@ import { Wishlist } from './aftercare.model.js';
 import { aftercareRouter, sellerReturnsRouter } from './aftercare.routes.js';
 import cartRouter from './cart.routes.js';
 import { sellerInventoryRouter } from './inventory.routes.js';
+import { assertPlanFeature, assertWithinPlan } from '../plans/subscription.service.js';
 import { FULFILMENT_METHODS, LIFE_STAGES, MAX_OPTIONS, MAX_VARIANTS, ORDER_STATUSES, PET_TYPES, Product, ShopOrder } from './shop.model.js';
 import { advanceFulfilment, cancelLines, ensureFulfilments, fulfilmentOf, liveSellerIds, nextStatuses, placeOrder, quote, shownProducts } from './shop.service.js';
 
@@ -337,6 +338,8 @@ seller.get('/products/:id', validate(), async (req, res) => {
 // once the seller profile (GST, bank and pickup details) is approved: see liveSellerIds().
 seller.post('/products', validate({ body: productBody }), async (req, res) => {
   const vendor = await mySellerProfile(req);
+  await assertPlanFeature(vendor, 'marketplace');
+  await assertWithinPlan(vendor, 'products');
   res.status(201).json(await Product.create({ ...(await productFields(req.user._id, req.valid.body)), seller: vendor._id }));
 });
 

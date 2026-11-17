@@ -1,4 +1,4 @@
-import { Activity, CalendarHeart, GalleryHorizontal, LayoutDashboard, MapPinned, Megaphone, ScrollText, Shapes, ShieldCheck, Siren, Store, TicketPercent, Users } from 'lucide-react';
+import { Activity, CalendarHeart, CreditCard, GalleryHorizontal, LayoutDashboard, MapPinned, Megaphone, ScrollText, Shapes, ShieldCheck, Siren, Store, TicketPercent, Users } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { NurviaMark } from './icons.jsx';
@@ -18,6 +18,7 @@ const Customers = lazy(() => import('./pages/Customers.jsx'));
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
 const Moderation = lazy(() => import('./pages/Moderation.jsx'));
 const Overview = lazy(() => import('./pages/Overview.jsx'));
+const Plans = lazy(() => import('./pages/Plans.jsx'));
 const Platform = lazy(() => import('./pages/Platform.jsx'));
 const Reports = lazy(() => import('./pages/Reports.jsx'));
 const VendorDetail = lazy(() => import('./pages/VendorDetail.jsx'));
@@ -33,6 +34,7 @@ const NAV = [
   { to: '/vendors', label: 'Vendor verification', icon: Store, permission: 'vendors.read', element: <Vendors />, count: (d) => d.vendors.awaitingApproval, tone: 'warn' },
   { to: '/customers', label: 'Customers', icon: Users, permission: 'users.read', element: <Customers /> },
   { to: '/bookings', label: 'Bookings & payments', icon: CalendarHeart, permission: 'bookings.read', element: <Bookings /> },
+  { to: '/plans', label: 'Plans & subscriptions', icon: CreditCard, permission: 'plans.manage', element: <Plans /> },
   { section: 'Trust & safety' },
   { to: '/moderation', label: 'Moderation', icon: ShieldCheck, permission: 'content.moderate', element: <Moderation />, count: (d) => d.adoption.awaitingReview, tone: 'warn' },
   { to: '/reports', label: 'Safety reports', icon: Siren, permission: 'reports.manage', element: <Reports />, count: (d) => d.reports.open, tone: 'crit' },

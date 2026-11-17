@@ -8,6 +8,8 @@ import { paymentGateway } from '../../integrations/payments.js';
 import { Booking } from '../bookings/booking.model.js';
 import { isActive } from '../bookings/booking.service.js';
 import { notify } from '../notifications/notify.js';
+import { SubscriptionOrder } from '../plans/plan.model.js';
+import { activateOrder, failOrder } from '../plans/subscription.service.js';
 import { ShopOrder } from '../shop/shop.model.js';
 import { markOrderPaid } from '../shop/shop.service.js';
 
@@ -111,10 +113,14 @@ export const paymentWebhook = [
       if (event.event === 'payment.captured' && orderId) {
         const payable = await findPayable({ 'payment.orderId': orderId });
         if (payable) await settle(payable, payment.id);
+        // A vendor buying a plan (plans/subscription.service.js).
+        const subscriptionOrder = !payable && (await SubscriptionOrder.findOne({ 'payment.orderId': orderId }));
+        if (subscriptionOrder) await activateOrder(subscriptionOrder, payment.id);
       } else if (event.event === 'payment.failed' && orderId) {
         for (const Model of [Booking, ShopOrder]) {
           await Model.updateOne({ 'payment.orderId': orderId, 'payment.status': 'pending' }, { 'payment.status': 'failed', 'payment.failureReason': payment.error_description });
         }
+        await failOrder(orderId, payment.error_description);
       } else if (event.event === 'refund.processed' && refund?.payment_id) {
         for (const Model of [Booking, ShopOrder]) {
           await Model.updateOne({ 'payment.paymentId': refund.payment_id }, { 'payment.status': 'refunded', 'payment.refundId': refund.id, 'payment.refundedAt': new Date() });

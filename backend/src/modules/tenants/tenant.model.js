@@ -11,7 +11,8 @@ const tenantSchema = new mongoose.Schema(
     plan: { type: String, default: 'platform' },
     branding: { logoUrl: String, primaryColor: String, appName: String, faviconUrl: String },
     theme: { primaryColor: String, accentColor: String, fontFamily: String },
-    business: { legalName: String, phone: String, email: String, address: String, gstin: String },
+    // Also the supplier on vendor plan invoices. sacCode: the SAC printed on those invoices.
+    business: { legalName: String, phone: String, email: String, address: String, gstin: String, sacCode: String },
     storefront: { tagline: { type: String, maxlength: 160 }, about: { type: String, maxlength: 2000 }, heroImageUrl: String },
     // Whether this tenant's business also appears inside Nurvia. The branded channel stays independent either way.
     nurviaVisibility: { listInNurvia: { type: Boolean, default: false }, publishProducts: { type: Boolean, default: false } },

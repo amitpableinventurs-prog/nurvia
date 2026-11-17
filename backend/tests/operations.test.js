@@ -386,7 +386,7 @@ describe('referrals and loyalty', () => {
 
 describe('plans and admin tools', () => {
   it('enforces a plan’s staff limit', async () => {
-    const plan = await admin.http.post('/admin/plans').send({ code: 'starter', name: 'Starter', audience: 'vendor', pricePaise: 99900, limits: { staff: 2 } }).expect(201);
+    const plan = await admin.http.post('/admin/plans').send({ code: 'starter', name: 'Starter', audience: 'vendor', monthlyPricePaise: 99900, yearlyPricePaise: 999000, limits: { staff: 2 } }).expect(201);
     expect((await api().get('/plans?audience=vendor').expect(200)).body[0].code).toBe('starter');
     await admin.http.put(`/admin/vendors/${vendor._id}/subscription`).send({ planId: plan.body._id, reason: 'Pilot' }).expect(200);
     const res = await owner.http.post('/vendors/me/staff').send({ name: 'Third', phone: '+919844444444', role: 'vet' }).expect(402);
