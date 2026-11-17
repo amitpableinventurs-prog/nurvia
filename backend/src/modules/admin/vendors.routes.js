@@ -122,7 +122,32 @@ const categoryBody = {
   icon: z.string().max(200).optional(),
   sortOrder: z.number().int().optional(),
   active: z.boolean().optional(),
+  // Product categories: days after delivery a return can be asked for (0: not returnable).
+  returnWindowDays: z.number().int().min(0).max(60).nullable().optional(),
 };
+
+// Product categories nest at most 3 levels deep (Dogs › Food › Dry food), and never under themselves.
+const MAX_CATEGORY_DEPTH = 3;
+async function checkParent(kind, parentId, selfId) {
+  if (!parentId) return;
+  let depth = 1;
+  let current = await Category.findById(parentId).select('kind parent').lean();
+  if (!current) throw badRequest('Unknown parent category');
+  if (current.kind !== kind) throw badRequest('A category can only sit under a category of the same kind');
+  while (current) {
+    if (selfId && String(current._id) === String(selfId)) throw badRequest('A category cannot sit under itself');
+    depth++;
+    current = current.parent ? await Category.findById(current.parent).select('parent').lean() : null;
+  }
+  // Levels below the moved category count too.
+  let below = 0;
+  let level = selfId ? [selfId] : [];
+  while (level.length) {
+    level = (await Category.find({ parent: { $in: level } }).select('_id').lean()).map((c) => c._id);
+    if (level.length) below++;
+  }
+  if (depth + below > MAX_CATEGORY_DEPTH) throw badRequest(`Categories can be at most ${MAX_CATEGORY_DEPTH} levels deep`);
+}
 
 router.get('/categories', requirePermission(PERMISSIONS.VENDORS_READ), validate({ query: { kind: categoryBody.kind.optional() } }), async (req, res) => {
   const { kind } = req.valid.query;
@@ -130,7 +155,8 @@ router.get('/categories', requirePermission(PERMISSIONS.VENDORS_READ), validate(
 });
 
 router.post('/categories', requirePermission(PERMISSIONS.CATEGORIES_MANAGE), validate({ body: categoryBody }), async (req, res) => {
-  const category = await Category.create(req.valid.body);
+  await checkParent(req.valid.body.kind, req.valid.body.parent);
+  const category = await Category.create({ ...req.valid.body, returnWindowDays: req.valid.body.returnWindowDays ?? undefined });
   await audit(req, 'category.create', { type: 'category', id: category._id });
   res.status(201).json(category);
 });
@@ -140,7 +166,12 @@ router.patch(
   requirePermission(PERMISSIONS.CATEGORIES_MANAGE),
   validate({ body: Object.fromEntries(Object.entries(categoryBody).filter(([k]) => k !== 'kind').map(([k, v]) => [k, v.optional()])) }),
   async (req, res) => {
-    const category = await Category.findByIdAndUpdate(req.valid.params.id, req.valid.body, { new: true, runValidators: true });
+    const existing = await Category.findById(req.valid.params.id).select('kind').lean();
+    if (!existing) throw notFound('Category');
+    await checkParent(existing.kind, req.valid.body.parent, existing._id);
+    const { returnWindowDays, ...rest } = req.valid.body;
+    const update = { ...rest, ...(returnWindowDays !== undefined && (returnWindowDays === null ? { $unset: { returnWindowDays: 1 } } : { returnWindowDays })) };
+    const category = await Category.findByIdAndUpdate(req.valid.params.id, update, { new: true, runValidators: true });
     if (!category) throw notFound('Category');
     await audit(req, 'category.update', { type: 'category', id: category._id }, { meta: req.valid.body });
     res.json(category);

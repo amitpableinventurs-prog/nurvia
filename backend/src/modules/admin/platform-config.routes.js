@@ -18,7 +18,7 @@ const configure = requirePermission(PERMISSIONS.PLATFORM_CONFIGURE);
 // Everything the "Cities & features" screen shows in one call.
 router.get('/platform', read, async (_req, res) => {
   clearPlatformCache();
-  const { features, cities } = await getPlatform();
+  const { features, cities, marketplace } = await getPlatform();
   const [categories, vendorsByCity] = await Promise.all([
     Category.find({ kind: 'vendor' }).sort({ sortOrder: 1, name: 1 }).select('name slug active').lean(),
     Vendor.aggregate([{ $match: { status: 'active' } }, { $group: { _id: { $toLower: '$address.city' }, count: { $sum: 1 } } }]),
@@ -33,8 +33,24 @@ router.get('/platform', read, async (_req, res) => {
       liveVendors: [...new Set([c.name, c.slug, ...(c.aliases ?? [])].map((n) => n.toLowerCase()))].reduce((n, name) => n + (supply.get(name) ?? 0), 0),
     })),
     vendorCategories: categories,
+    marketplace,
   });
 });
+
+// Cash on delivery on or off for the whole marketplace, and the largest order it may be used for.
+router.patch(
+  '/platform/marketplace',
+  configure,
+  validate({ body: { codEnabled: z.boolean().optional(), codMaxOrderPaise: z.number().int().min(0).max(10_000_000).optional() } }),
+  async (req, res) => {
+    const config = (await PlatformConfig.findOne({ key: 'platform' })) ?? new PlatformConfig({ key: 'platform' });
+    for (const [k, v] of Object.entries(req.valid.body)) if (v !== undefined) config.set(`marketplace.${k}`, v);
+    await config.save();
+    clearPlatformCache();
+    await audit(req, 'platform.marketplace', { type: 'platform_config', id: config._id }, { meta: req.valid.body });
+    res.json((await getPlatform()).marketplace);
+  },
+);
 
 router.patch(
   '/platform/features',

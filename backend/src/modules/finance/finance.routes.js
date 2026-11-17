@@ -56,8 +56,45 @@ async function ownSellerVendor(req) {
 
 sellerOnboardingRouter.get('/profile', async (req, res) => {
   const vendor = await ownSellerVendor(req);
-  res.json({ vendorStatus: vendor.status, ...(vendor.toObject().seller ?? { status: 'none' }) });
+  res.json({ vendorStatus: vendor.status, pickup: Boolean(vendor.store?.inStorePickup), ...(vendor.toObject().seller ?? { status: 'none' }) });
 });
+
+// How the seller gets orders to customers. These take effect at once, without a new review:
+// home delivery (on or off, radius from the shop, fee and the order value above which it is free),
+// store pickup, and where returns are sent.
+sellerOnboardingRouter.put(
+  '/fulfilment',
+  validate({
+    body: {
+      delivers: z.boolean().optional(),
+      radiusKm: z.number().min(1).max(100).optional(),
+      feePaise: z.number().int().min(0).max(100_000).optional(),
+      freeFromPaise: z.number().int().min(0).max(10_000_000).optional(),
+      pickup: z.boolean().optional(),
+      returnAddress: z
+        .object({
+          line1: z.string().trim().min(3).max(200),
+          line2: z.string().trim().max(200).optional(),
+          city: z.string().trim().min(2).max(80),
+          state: z.string().trim().max(80).optional(),
+          pincode: z.string().regex(/^\d{6}$/),
+          phone: z.string().trim().max(20).optional(),
+        })
+        .optional(),
+    },
+  }),
+  async (req, res) => {
+    const vendor = await ownSellerVendor(req);
+    const { pickup, returnAddress, ...shipping } = req.valid.body;
+    for (const [k, v] of Object.entries(shipping)) if (v !== undefined) vendor.set(`seller.shipping.${k}`, v);
+    if (returnAddress) vendor.set('seller.returnAddress', returnAddress);
+    if (pickup !== undefined) vendor.set('store.inStorePickup', pickup);
+    const after = { ...vendor.toObject().seller?.shipping, pickup: Boolean(vendor.store?.inStorePickup) };
+    if (!after.delivers && !after.pickup) throw badRequest('Offer home delivery, store pickup or both');
+    await vendor.save();
+    res.json({ ...after, returnAddress: vendor.toObject().seller?.returnAddress });
+  },
+);
 
 // Applying (or re-applying after a rejection) sends the seller profile to staff for approval.
 sellerOnboardingRouter.put('/profile', validate({ body: sellerBody }), async (req, res) => {

@@ -7,14 +7,15 @@ import { badRequest, conflict, forbidden, notFound } from '../../common/errors.j
 import { paginate } from '../../common/paginate.js';
 import { PERMISSIONS } from '../../common/roles.js';
 import { objectId, pageQuery, validate } from '../../common/validate.js';
-import { paymentGateway } from '../../integrations/payments.js';
 import { audit } from '../audit/audit.model.js';
 import { attachmentsFor } from '../files/file.routes.js';
 import { notify } from '../notifications/notify.js';
 import { Vendor } from '../vendors/vendor.model.js';
+import { Category } from '../categories/category.model.js';
 import { RETURN_REASONS, RETURN_STATUSES, RETURN_WINDOW_DAYS, ProductReview, ReturnRequest, Wishlist } from './aftercare.model.js';
+import { changeStock } from './inventory.service.js';
 import { Product, ShopOrder } from './shop.model.js';
-import { shownProducts } from './shop.service.js';
+import { ensureFulfilments, fulfilmentOf, refundPayment, shownProducts } from './shop.service.js';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode = () => 'RT' + Array.from(crypto.randomBytes(6), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
@@ -33,15 +34,14 @@ aftercareRouter.post(
       items: z.array(z.object({ sku: z.string().min(1).max(60), qty: z.number().int().min(1).max(10) })).min(1).max(50),
       reason: z.enum(RETURN_REASONS),
       details: z.string().trim().max(1000).optional(),
-      photoFileIds: z.array(objectId).max(6).optional(),
+      photoFileIds: z.array(objectId).max(4).optional(),
     },
   }),
   async (req, res) => {
     const order = await ShopOrder.findOne({ _id: req.valid.params.id, user: req.user._id }).lean();
     if (!order) throw notFound('Order');
-    if (order.status !== 'delivered') throw conflict('Only a delivered order can be returned');
-    const deliveredAt = order.deliveredAt ?? order.statusHistory.findLast((h) => h.status === 'delivered')?.at ?? order.updatedAt;
-    if (Date.now() - deliveredAt > RETURN_WINDOW_DAYS * 86_400_000) throw conflict(`Returns are accepted within ${RETURN_WINDOW_DAYS} days of delivery`);
+    ensureFulfilments(order);
+    const windows = new Map((await Category.find({ _id: { $in: order.items.map((i) => i.category).filter(Boolean) } }).select('returnWindowDays').lean()).map((c) => [String(c._id), c.returnWindowDays ?? RETURN_WINDOW_DAYS]));
 
     // Quantities already in an open or completed return cannot be returned twice.
     const previous = await ReturnRequest.find({ order: order._id, status: { $nin: ['rejected', 'cancelled'] } }).lean();
@@ -49,6 +49,14 @@ aftercareRouter.post(
     const lines = req.valid.body.items.map(({ sku, qty }) => {
       const line = order.items.find((i) => i.sku === sku);
       if (!line) throw badRequest(`${sku} is not in this order`);
+      if (line.cancelled) throw conflict(`${line.name} was cancelled`);
+      if (line.returnable === false) throw conflict(`${line.name} cannot be returned`);
+      // Each seller's part counts from its own delivery; each category has its own window.
+      const part = fulfilmentOf(order, line.seller);
+      if (part.status !== 'delivered') throw conflict('Only delivered items can be returned');
+      const deliveredAt = part.deliveredAt ?? order.deliveredAt ?? order.statusHistory.findLast((h) => h.status === 'delivered')?.at ?? order.updatedAt;
+      const days = line.category ? windows.get(String(line.category)) ?? RETURN_WINDOW_DAYS : RETURN_WINDOW_DAYS;
+      if (Date.now() - deliveredAt > days * 86_400_000) throw conflict(days ? `Returns for ${line.name} are accepted within ${days} days of delivery` : `${line.name} cannot be returned`);
       if (qty + alreadyReturned(sku) > line.qty) throw badRequest(`You can return at most ${line.qty - alreadyReturned(sku)} of ${line.name}`);
       return { product: line.product, sku, name: line.name, variantLabel: line.variantLabel, qty, pricePaise: line.pricePaise, seller: String(line.seller) };
     });
@@ -114,7 +122,11 @@ aftercareRouter.post(
   async (req, res) => {
     const product = await Product.findOne({ slug: req.valid.params.slug }).select('_id');
     if (!product) throw notFound('Product');
-    const order = await ShopOrder.findOne({ user: req.user._id, status: 'delivered', 'items.product': product._id }).select('_id').lean();
+    const received = await ShopOrder.find({ user: req.user._id, items: { $elemMatch: { product: product._id, cancelled: { $ne: true } } }, status: { $nin: ['pending_payment', 'cancelled'] } }).select('items fulfilments status statusHistory pricing updatedAt').lean();
+    const order = received.find((o) => {
+      ensureFulfilments(o);
+      return o.items.some((i) => String(i.product) === String(product._id) && !i.cancelled && fulfilmentOf(o, i.seller)?.status === 'delivered');
+    });
     if (!order) throw forbidden('You can review products you have received');
     if (await ProductReview.exists({ product: product._id, author: req.user._id })) throw conflict('You have already reviewed this product');
     const review = await ProductReview.create({ ...req.valid.body, product: product._id, order: order._id, author: req.user._id });
@@ -160,7 +172,8 @@ aftercareRouter.delete('/wishlist/items/:productId', authenticate, validate({ pa
 // ---- Return decisions: shared by the seller and Nurvia staff ----
 
 const DECISIONS = {
-  approve: { from: ['requested'], to: 'approved' },
+  // Nurvia staff can also approve a return the seller rejected.
+  approve: { from: ['requested'], staffFrom: ['rejected'], to: 'approved' },
   reject: { from: ['requested'], to: 'rejected' },
   mark_picked_up: { from: ['approved'], to: 'picked_up' },
   mark_received: { from: ['approved', 'picked_up'], to: 'received' },
@@ -171,42 +184,38 @@ const DECISIONS = {
 // delivery fee kept), and never more than is left unrefunded on the order.
 function refundableAmount(order, ret) {
   const itemsPaise = ret.items.reduce((sum, i) => sum + i.pricePaise * i.qty, 0);
-  const { subtotalPaise, discountPaise = 0 } = order.pricing;
-  const share = subtotalPaise ? Math.round((itemsPaise * (subtotalPaise - discountPaise)) / subtotalPaise) : itemsPaise;
+  const { subtotalPaise, deliveryPaise = 0, totalPaise } = order.pricing;
+  const share = subtotalPaise ? Math.round((itemsPaise * Math.max(0, totalPaise - deliveryPaise)) / subtotalPaise) : itemsPaise;
   const paid = order.payment.amountPaise ?? order.pricing.totalPaise;
   return Math.max(0, Math.min(share, paid - (order.payment.refundedPaise ?? 0)));
 }
 
-async function restock(items) {
-  for (const { product, sku, qty } of items) {
-    await Product.updateOne({ _id: product, 'variants.sku': sku }, { $inc: { 'variants.$.stock': qty }, inStock: true });
-  }
+async function restock(items, { ref, by }) {
+  for (const { product, sku, qty } of items) await changeStock({ product, sku, delta: qty, reason: 'return_restock', ref, by });
 }
 
-async function decide(req, ret, { action, note, restock: putBack }) {
+async function decide(req, ret, { action, note, restock: putBack }, { staff = false } = {}) {
   const rule = DECISIONS[action];
-  if (!rule.from.includes(ret.status)) throw conflict(`Cannot ${action.replace(/_/g, ' ')} a return that is ${ret.status}`);
+  if (![...rule.from, ...(staff ? rule.staffFrom ?? [] : [])].includes(ret.status)) throw conflict(`Cannot ${action.replace(/_/g, ' ')} a return that is ${ret.status}`);
   if (action === 'reject' && !note) throw badRequest('Give a reason for rejecting the return');
   if (action === 'refund') {
     const order = await ShopOrder.findById(ret.order);
     if (order.payment.status !== 'paid' && order.payment.status !== 'refunded' && order.payment.status !== 'refund_pending') throw conflict('This order was never paid');
     const amount = refundableAmount(order, ret);
     if (order.paymentMethod === 'online' && amount > 0) {
-      const refund = await paymentGateway().refund({ paymentId: order.payment.paymentId, amountPaise: amount, notes: { shopOrderId: String(order._id), returnId: String(ret._id), tenant: order.tenant } });
-      ret.refund = { amountPaise: amount, method: 'gateway', status: refund.status === 'processed' ? 'processed' : 'pending', refundId: refund.refundId, at: new Date() };
+      const refund = await refundPayment(order, amount, { reason: `Return ${ret.code}`, notes: { returnId: String(ret._id) } });
+      ret.refund = { amountPaise: amount, method: 'gateway', status: refund.status, refundId: refund.refundId, at: new Date() };
     } else {
-      // Cash-on-delivery money goes back by UPI or bank transfer, outside the gateway.
+      // Cash-on-delivery money goes back by UPI or bank transfer, outside the gateway; staff record
+      // it as paid with POST /admin/shop/returns/:id/refund-paid.
       ret.refund = { amountPaise: amount, method: 'manual', status: 'pending', at: new Date() };
-    }
-    order.payment.refundedPaise = (order.payment.refundedPaise ?? 0) + amount;
-    if (order.payment.refundedPaise >= (order.payment.amountPaise ?? order.pricing.totalPaise)) {
-      order.payment.status = ret.refund.status === 'processed' ? 'refunded' : 'refund_pending';
-      order.payment.refundedAt = new Date();
+      order.payment.refunds.push({ amountPaise: amount, status: 'pending', reason: `Return ${ret.code} (manual)` });
+      order.payment.refundedPaise = (order.payment.refundedPaise ?? 0) + amount;
     }
     await order.save();
   }
   if (action === 'mark_received' && putBack && !ret.restocked) {
-    await restock(ret.items);
+    await restock(ret.items, { ref: ret.code, by: req.user._id });
     ret.restocked = true;
   }
   ret.status = rule.to;
@@ -258,7 +267,26 @@ adminReturnsRouter.get('/returns', validate({ query: { ...pageQuery, status: z.e
 adminReturnsRouter.post('/returns/:id/decision', requirePermission(PERMISSIONS.ORDERS_MANAGE), validate({ body: { ...decisionBody, note: z.string().trim().min(3).max(500) } }), async (req, res) => {
   const ret = await ReturnRequest.findById(req.valid.params.id);
   if (!ret) throw notFound('Return');
-  await decide(req, ret, req.valid.body);
+  await decide(req, ret, req.valid.body, { staff: true });
   await audit(req, `shop_return.${req.valid.body.action}`, { type: 'shop_return', id: ret._id }, { reason: req.valid.body.note });
   res.json(ret);
 });
+
+// A cash-on-delivery refund paid to the customer by UPI or bank transfer, recorded with its reference.
+adminReturnsRouter.post(
+  '/returns/:id/refund-paid',
+  requirePermission(PERMISSIONS.ORDERS_MANAGE),
+  validate({ body: { reference: z.string().trim().min(3).max(80) } }),
+  async (req, res) => {
+    const ret = await ReturnRequest.findById(req.valid.params.id);
+    if (!ret) throw notFound('Return');
+    if (ret.refund?.method !== 'manual' || ret.refund.status !== 'pending') throw conflict('This return has no manual refund waiting');
+    ret.refund.status = 'processed';
+    ret.refund.refundId = req.valid.body.reference;
+    ret.refund.at = new Date();
+    await ret.save();
+    await audit(req, 'shop_return.refund_paid', { type: 'shop_return', id: ret._id }, { meta: { reference: req.valid.body.reference, amountPaise: ret.refund.amountPaise } });
+    await notify([ret.user], { type: 'shop.return_refunded', title: 'Refund paid', body: `${ret.code} · ₹${(ret.refund.amountPaise / 100).toFixed(2)}`, data: { returnId: String(ret._id) } });
+    res.json(ret);
+  },
+);

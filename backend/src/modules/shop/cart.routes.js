@@ -34,7 +34,7 @@ const CART_RESPONSE = { 200: { description: 'The cart, priced now', example: CAR
 async function pricedCart(userId, couponCode) {
   const cart = await Cart.findOne({ user: userId }).lean();
   const items = (cart?.items ?? []).map((i) => ({ productId: String(i.product), sku: i.sku, qty: i.qty }));
-  return { items, itemCount: items.reduce((n, i) => n + i.qty, 0), ...(await quote(items, couponCode)) };
+  return { items, itemCount: items.reduce((n, i) => n + i.qty, 0), ...(await quote(items, couponCode, { userId })) };
 }
 
 const lineOf = (userId, product, lineSku) => ({ user: userId, items: { $elemMatch: { product, sku: lineSku } } });

@@ -86,6 +86,14 @@ const vendorSchema = new mongoose.Schema(
       pickupAddress: { line1: String, line2: String, city: String, state: String, pincode: String, phone: String },
       documents: [{ _id: false, type: { type: String, enum: ['gst_certificate', 'pan', 'cancelled_cheque', 'shop_license', 'other'] }, file: { type: ObjectId, ref: 'File' }, name: String }],
       commissionPct: { type: Number, min: 0, max: 50 }, // overrides the platform rate when set
+      // Home delivery by the seller itself. Store pickup is `store.inStorePickup`.
+      shipping: {
+        delivers: { type: Boolean, default: true },
+        radiusKm: { type: Number, min: 1, max: 100, default: 10 },
+        feePaise: { type: Number, min: 0, default: 4900 },
+        freeFromPaise: { type: Number, min: 0, default: 49900 },
+      },
+      returnAddress: { line1: String, line2: String, city: String, state: String, pincode: String, phone: String },
       submittedAt: Date,
       reviewedAt: Date,
       reviewedBy: { type: ObjectId, ref: 'User' },

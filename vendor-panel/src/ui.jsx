@@ -45,13 +45,14 @@ const TONES = {
   good: ['active', 'approved', 'visible', 'open', 'accepted', 'completed', 'paid', 'actioned', 'delivered', 'refunded'],
   warning: ['pending', 'submitted', 'pending_review', 'on_hold', 'refund_pending', 'shortlisted', 'placed', 'requested'],
   serious: ['hidden', 'no_show', 'failed', 'unpaid'],
-  critical: ['suspended', 'rejected', 'removed', 'cancelled', 'deleted'],
+  critical: ['suspended', 'rejected', 'removed', 'cancelled', 'deleted', 'blocked'],
 };
 
-export function Badge({ value }) {
+// `label` replaces the shown text when the stored value reads badly (shipped is "Out for delivery").
+export function Badge({ value, label }) {
   if (!value) return null;
   const tone = Object.keys(TONES).find((t) => TONES[t].includes(value)) ?? '';
-  return <span className={`badge ${tone}`}>{value.replaceAll('_', ' ')}</span>;
+  return <span className={`badge ${tone}`}>{label ?? value.replaceAll('_', ' ')}</span>;
 }
 
 // Trade licence state for a vendor; the tone follows the same dot + label pattern as Badge.

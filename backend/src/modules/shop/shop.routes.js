@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { z } from 'zod';
-import { authenticate, requireRoles } from '../../common/auth.js';
+import { authenticate, optionalAuth, requireRoles } from '../../common/auth.js';
 import { badRequest, conflict, notFound } from '../../common/errors.js';
 import { paginate } from '../../common/paginate.js';
 import { ROLES } from '../../common/roles.js';
@@ -13,16 +13,16 @@ import { notify } from '../notifications/notify.js';
 import { assertModuleAt } from '../platform/platform.service.js';
 import { Vendor } from '../vendors/vendor.model.js';
 import { sellerOnboardingRouter } from '../finance/finance.routes.js';
-import { onQualifyingActivity } from '../loyalty/loyalty.service.js';
 import { Wishlist } from './aftercare.model.js';
 import { aftercareRouter, sellerReturnsRouter } from './aftercare.routes.js';
 import cartRouter from './cart.routes.js';
-import { ORDER_STATUSES, PET_TYPES, Product, ShopOrder } from './shop.model.js';
-import { cancelOrder, liveSellerIds, placeOrder, quote, shownProducts } from './shop.service.js';
+import { sellerInventoryRouter } from './inventory.routes.js';
+import { FULFILMENT_METHODS, LIFE_STAGES, MAX_OPTIONS, MAX_VARIANTS, ORDER_STATUSES, PET_TYPES, Product, ShopOrder } from './shop.model.js';
+import { advanceFulfilment, cancelLines, ensureFulfilments, fulfilmentOf, liveSellerIds, nextStatuses, placeOrder, quote, shownProducts } from './shop.service.js';
 
 const router = Router();
 
-export const CARD_FIELDS = 'name slug brand images art pricePaise mrpPaise discountPct inStock ratingAvg ratingCount petTypes variants.sku variants.label variants.pricePaise variants.mrpPaise variants.stock category';
+export const CARD_FIELDS = 'name slug brand images art pricePaise mrpPaise discountPct inStock ratingAvg ratingCount petTypes lifeStages variants.sku variants.label variants.pricePaise variants.mrpPaise variants.stock category';
 
 export const SORTS = {
   popular: { soldCount: -1, ratingAvg: -1, _id: 1 },
@@ -32,6 +32,19 @@ export const SORTS = {
   discount: { discountPct: -1, soldCount: -1, _id: 1 },
   rating: { ratingAvg: -1, ratingCount: -1, _id: 1 },
 };
+// `relevance` is the default when searching: best sellers first among the matches.
+const sortOf = (sort, q) => SORTS[sort === 'relevance' || (!sort && q) ? 'popular' : sort ?? 'popular'];
+
+// A category and every category under it (up to 3 levels), so "Dogs" also lists "Dogs › Food › Dry food".
+async function categoryAndChildren(id) {
+  const ids = [id];
+  let level = [id];
+  for (let depth = 0; depth < 2 && level.length; depth++) {
+    level = (await Category.find({ kind: 'product', parent: { $in: level } }).select('_id').lean()).map((c) => c._id);
+    ids.push(...level);
+  }
+  return ids;
+}
 
 // ---- Catalogue (public) ----
 
@@ -59,19 +72,20 @@ router.get(
     query: {
       ...pageQuery,
       q: z.string().trim().max(80).optional(),
-      category: z.string().max(60).optional(), // slug
+      category: z.string().max(60).optional(), // slug; includes its sub-categories
       pet: z.enum(PET_TYPES).optional(),
+      lifeStage: z.enum(LIFE_STAGES).optional(),
       brand: z.string().max(80).optional(),
       minPrice: z.coerce.number().int().min(0).optional(), // rupees
       maxPrice: z.coerce.number().int().min(0).optional(),
       inStock: z.enum(['true']).optional(),
-      sort: z.enum(Object.keys(SORTS)).default('popular'),
+      sort: z.enum([...Object.keys(SORTS), 'relevance']).optional(),
       // One seller's products, for their store page.
       seller: objectId.optional(),
     },
   }),
   async (req, res) => {
-    const { page, limit, q, category, pet, brand, minPrice, maxPrice, inStock, sort, seller } = req.valid.query;
+    const { page, limit, q, category, pet, lifeStage, brand, minPrice, maxPrice, inStock, sort, seller } = req.valid.query;
     const filter = await shownProducts();
     if (seller) {
       if (!filter.seller.$in.some((id) => String(id) === seller)) return res.json({ items: [], page, limit, total: 0, pages: 0 });
@@ -80,31 +94,38 @@ router.get(
     if (category) {
       const cat = await Category.findOne({ kind: 'product', slug: category }).lean();
       if (!cat) return res.json({ items: [], page, limit, total: 0, pages: 0 });
-      filter.category = cat._id;
+      filter.category = { $in: await categoryAndChildren(cat._id) };
     }
     if (q) {
       const pattern = { $regex: escapeRegex(q), $options: 'i' };
       filter.$or = [{ name: pattern }, { brand: pattern }, { tags: q.toLowerCase() }];
     }
     if (pet) filter.petTypes = pet;
+    if (lifeStage) filter.lifeStages = { $in: [lifeStage, 'all'] };
     if (brand) filter.brand = brand;
     if (inStock) filter.inStock = true;
     if (minPrice != null || maxPrice != null) {
       filter.pricePaise = { ...(minPrice != null && { $gte: minPrice * 100 }), ...(maxPrice != null && { $lte: maxPrice * 100 }) };
     }
-    res.json(await paginate(Product, filter, { page, limit, sort: SORTS[sort], select: CARD_FIELDS }));
+    res.json(await paginate(Product, filter, { page, limit, sort: sortOf(sort, q), select: CARD_FIELDS }));
   },
 );
 
 router.get('/products/:slug', validate({ params: { slug: z.string().regex(/^[a-z0-9-]+$/) } }), async (req, res) => {
   const shown = await shownProducts();
-  const product = await Product.findOne({ ...shown, slug: req.valid.params.slug }).populate('category', 'name slug').lean();
+  const product = await Product.findOne({ ...shown, slug: req.valid.params.slug }).select('-blocked').populate('category', 'name slug returnWindowDays').lean();
   if (!product) throw notFound('Product');
   const [seller, related] = await Promise.all([
-    Vendor.findById(product.seller).select('businessName address.city ratingAvg ratingCount').lean(),
+    Vendor.findById(product.seller).select('businessName address.city ratingAvg ratingCount seller.shipping store.inStorePickup').lean(),
     Product.find({ ...shown, category: product.category._id, _id: { $ne: product._id } }).select(CARD_FIELDS).sort(SORTS.popular).limit(8).lean(),
   ]);
-  res.json({ ...product, seller, related });
+  const { seller: sellerProfile, store, ...sellerCard } = seller ?? {};
+  res.json({
+    ...product,
+    seller: seller && { ...sellerCard, delivery: sellerProfile?.shipping ?? null, pickup: Boolean(store?.inStorePickup) },
+    returnWindowDays: product.returnable === false ? 0 : product.category.returnWindowDays ?? 7,
+    related,
+  });
 });
 
 // A seller's store page header; its products come from GET /products?seller=<id>.
@@ -112,11 +133,12 @@ router.get('/sellers/:id', validate(), async (req, res) => {
   const live = await liveSellerIds();
   if (!live.some((id) => String(id) === req.valid.params.id)) throw notFound('Seller');
   const [seller, productCount, brands] = await Promise.all([
-    Vendor.findById(req.valid.params.id).select('businessName description address.city ratingAvg ratingCount photos').lean(),
+    Vendor.findById(req.valid.params.id).select('businessName description address.city ratingAvg ratingCount photos seller.shipping store.inStorePickup').lean(),
     Product.countDocuments({ seller: req.valid.params.id, status: 'active' }),
     Product.distinct('brand', { seller: req.valid.params.id, status: 'active', brand: { $ne: null } }),
   ]);
-  res.json({ ...seller, productCount, brands: brands.filter(Boolean).sort() });
+  const { seller: sellerProfile, store, ...card } = seller;
+  res.json({ ...card, delivery: sellerProfile?.shipping ?? null, pickup: Boolean(store?.inStorePickup), productCount, brands: brands.filter(Boolean).sort() });
 });
 
 // ---- Cart & checkout ----
@@ -124,13 +146,6 @@ router.get('/sellers/:id', validate(), async (req, res) => {
 const cartItems = z
   .array(z.object({ productId: objectId, sku: z.string().min(1).max(60), qty: z.number().int().min(1).max(10) }))
   .max(50);
-
-// One offer per cart: the entered `couponCode` when it is valid, otherwise the best automatic
-// discount the cart qualifies for (`coupon.automatic: true`, no code needed). An invalid code still
-// returns `couponError` alongside any automatic discount.
-router.post('/quote', validate({ body: { items: cartItems, couponCode: z.string().trim().max(20).optional() } }), async (req, res) => {
-  res.json(await quote(req.valid.body.items, req.valid.body.couponCode));
-});
 
 const address = z.object({
   name: z.string().trim().min(2).max(120),
@@ -140,13 +155,39 @@ const address = z.object({
   city: z.string().trim().min(2).max(80),
   state: z.string().trim().max(80).optional(),
   pincode: z.string().regex(/^\d{6}$/, 'Enter a 6-digit pincode'),
+  // The map pin, when the customer picked one: delivery radius is checked from it.
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
 });
+// How each seller in the cart fulfils: { "<sellerId>": "delivery" | "pickup" }.
+const fulfilment = z.record(objectId, z.enum(FULFILMENT_METHODS)).optional();
+
+// One offer per cart: the entered `couponCode` when it is valid, otherwise the best automatic
+// discount the cart qualifies for (`coupon.automatic: true`, no code needed). An invalid code still
+// returns `couponError` alongside any automatic discount. With an `address`, each entry of
+// `sellers` says whether that seller delivers there (`deliverable`, `problem`).
+router.post(
+  '/quote',
+  optionalAuth,
+  validate({ body: { items: cartItems, couponCode: z.string().trim().max(20).optional(), address: address.partial().optional(), fulfilment } }),
+  async (req, res) => {
+    const { items, couponCode, ...options } = req.valid.body;
+    res.json(await quote(items, couponCode, { ...options, userId: req.user?._id }));
+  },
+);
 
 router.post(
   '/orders',
   authenticate,
   validate({
-    body: { items: cartItems.min(1), couponCode: z.string().trim().max(20).optional(), address, paymentMethod: z.enum(['online', 'cod']), redeemPoints: z.number().int().min(0).max(1_000_000).optional() },
+    body: {
+      items: cartItems.min(1),
+      couponCode: z.string().trim().max(20).optional(),
+      address,
+      paymentMethod: z.enum(['online', 'cod']),
+      redeemPoints: z.number().int().min(0).max(1_000_000).optional(),
+      fulfilment,
+    },
   }),
   async (req, res) => {
     // Off outside production for now, so the apps can be tested with an address in any city.
@@ -155,82 +196,115 @@ router.post(
   },
 );
 
-router.get('/orders', authenticate, validate({ query: pageQuery }), async (req, res) => {
-  const { page, limit } = req.valid.query;
-  res.json(await paginate(ShopOrder, { user: req.user._id }, { page, limit }));
+router.get('/orders', authenticate, validate({ query: { ...pageQuery, status: z.enum(ORDER_STATUSES).optional() } }), async (req, res) => {
+  const { page, limit, status } = req.valid.query;
+  res.json(await paginate(ShopOrder, { user: req.user._id, ...(status && { status }) }, { page, limit }));
 });
 
 router.get('/orders/:id', authenticate, validate(), async (req, res) => {
-  const order = await ShopOrder.findOne({ _id: req.valid.params.id, user: req.user._id }).lean();
+  const order = await ShopOrder.findOne({ _id: req.valid.params.id, user: req.user._id }).populate('fulfilments.seller', 'businessName phone address').lean();
   if (!order) throw notFound('Order');
   res.json(order);
 });
 
-router.post('/orders/:id/cancel', authenticate, validate({ body: { reason: z.string().trim().max(300).optional() } }), async (req, res) => {
-  const order = await ShopOrder.findOne({ _id: req.valid.params.id, user: req.user._id });
-  if (!order) throw notFound('Order');
-  res.json(await cancelOrder(order, { by: req.user._id, reason: req.valid.body.reason }));
-});
+// Cancels the whole order, or only `skus`. Allowed until the seller packs that part of the order.
+router.post(
+  '/orders/:id/cancel',
+  authenticate,
+  validate({ body: { reason: z.string().trim().max(300).optional(), skus: z.array(z.string().min(1).max(60)).min(1).max(50).optional() } }),
+  async (req, res) => {
+    const order = await ShopOrder.findOne({ _id: req.valid.params.id, user: req.user._id });
+    if (!order) throw notFound('Order');
+    res.json(await cancelLines(order, { by: req.user._id, reason: req.valid.body.reason, skus: req.valid.body.skus, actor: 'customer' }));
+  },
+);
 
 // ---- Seller self-service (Vendor app) ----
 
 const seller = Router();
-// A variant at or below this stock shows up under the low-stock filter.
-const LOW_STOCK = 5;
 seller.use(authenticate, requireRoles(ROLES.VENDOR, ROLES.SELLER));
 
-async function mySellerProfile(req) {
+export async function mySellerProfile(req) {
   const vendor = await Vendor.findOne({ owner: req.user._id, status: 'active' }).lean();
   if (!vendor) throw conflict('Your business must be approved before you can sell');
   return vendor;
 }
 
-const productBody = {
+const variantBody = z
+  .object({
+    sku: z.string().trim().min(1).max(60),
+    label: z.string().trim().min(1).max(60),
+    mrpPaise: z.number().int().min(0),
+    pricePaise: z.number().int().min(0),
+    stock: z.number().int().min(0).max(100_000),
+    lowStockAt: z.number().int().min(0).max(100_000).optional(),
+    attributes: z.record(z.string().trim().min(1).max(30), z.string().trim().min(1).max(60)).optional(),
+    imageFileId: objectId.optional(),
+  })
+  .refine((v) => v.pricePaise <= v.mrpPaise, 'Selling price cannot exceed MRP');
+
+export const productBody = {
   name: z.string().trim().min(2).max(160),
   slug: z.string().regex(/^[a-z0-9-]+$/).max(120),
   brand: z.string().trim().max(80).optional(),
   categoryId: objectId,
   petTypes: z.array(z.enum(PET_TYPES)).max(5).optional(),
+  lifeStages: z.array(z.enum(LIFE_STAGES)).max(4).optional(),
+  allergens: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  weightGrams: z.number().int().min(0).max(1_000_000).optional(),
+  returnable: z.boolean().optional(),
+  options: z.array(z.string().trim().min(1).max(30)).max(MAX_OPTIONS).optional(),
   description: z.string().max(5000).optional(),
   highlights: z.array(z.string().max(160)).max(8).optional(),
   imageFileIds: z.array(objectId).max(8).optional(),
-  variants: z
-    .array(
-      z
-        .object({
-          sku: z.string().trim().min(1).max(60),
-          label: z.string().trim().min(1).max(60),
-          mrpPaise: z.number().int().min(0),
-          pricePaise: z.number().int().min(0),
-          stock: z.number().int().min(0).max(100_000),
-        })
-        .refine((v) => v.pricePaise <= v.mrpPaise, 'Selling price cannot exceed MRP'),
-    )
-    .min(1)
-    .max(20),
+  variants: z.array(variantBody).min(1).max(MAX_VARIANTS),
   hsn: z.string().max(10).optional(),
   gstRate: z.union([z.literal(0), z.literal(5), z.literal(12), z.literal(18), z.literal(28)]).optional(),
   tags: z.array(z.string().max(40)).max(15).optional(),
   status: z.enum(['draft', 'active', 'hidden']).optional(),
 };
 
-async function productFields(userId, { categoryId, imageFileIds, variants, ...body }) {
+// With option names set, every variant names a value for each of them, and no two variants are
+// the same combination.
+function checkVariantOptions(options = [], variants = []) {
+  if (!options.length) return;
+  if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) throw badRequest('Option names must be different');
+  const seen = new Set();
+  for (const v of variants) {
+    const keys = Object.keys(v.attributes ?? {});
+    if (keys.length !== options.length || !options.every((o) => keys.includes(o))) throw badRequest(`Variant ${v.sku} needs a value for ${options.join(' and ')}`);
+    const combo = options.map((o) => v.attributes[o].toLowerCase()).join('|');
+    if (seen.has(combo)) throw badRequest(`Two variants are both ${options.map((o) => v.attributes[o]).join(' / ')}`);
+    seen.add(combo);
+  }
+}
+
+export async function productFields(userId, { categoryId, imageFileIds, variants, ...body }, existing) {
   const fields = { ...body };
   if (categoryId) {
     if (!(await Category.exists({ _id: categoryId, kind: 'product' }))) throw badRequest('Unknown product category');
     fields.category = categoryId;
   }
   if (variants && new Set(variants.map((v) => v.sku)).size !== variants.length) throw badRequest('SKUs must be unique');
-  if (variants) fields.variants = variants;
+  checkVariantOptions(fields.options ?? existing?.options, variants ?? existing?.variants?.map((v) => ({ sku: v.sku, attributes: Object.fromEntries(v.attributes ?? []) })));
+  if (variants) {
+    fields.variants = [];
+    for (const { imageFileId, ...v } of variants) {
+      const image = imageFileId ? (await attachmentsFor(userId, [imageFileId], ['vendor_photo']))[0] : existing?.variants?.find((old) => old.sku === v.sku)?.image;
+      fields.variants.push({ ...v, ...(image && { image }) });
+    }
+  }
+  if (fields.allergens) fields.allergens = [...new Set(fields.allergens.map((a) => a.toLowerCase()))];
   if (imageFileIds) fields.images = await attachmentsFor(userId, imageFileIds, ['vendor_photo']);
   return fields;
 }
 
 // The seller's own products, archived ones excluded. `listing` says whether the shop shows them at
 // all (seller approved and business active), and each product's `shown` whether customers see it.
+// A product Nurvia blocked shows its `blocked.reason`.
 seller.get(
   '/products',
-  validate({ query: { ...pageQuery, status: z.enum(['draft', 'active', 'hidden']).optional(), q: z.string().trim().max(80).optional(), lowStock: z.enum(['true']).optional() } }),
+  validate({ query: { ...pageQuery, status: z.enum(['draft', 'active', 'hidden', 'blocked']).optional(), q: z.string().trim().max(80).optional(), lowStock: z.enum(['true']).optional() } }),
   async (req, res) => {
     const vendor = await mySellerProfile(req);
     const { page, limit, status, q, lowStock } = req.valid.query;
@@ -238,7 +312,7 @@ seller.get(
       seller: vendor._id,
       status: status ?? { $ne: 'archived' },
       ...(q && { $or: [{ name: { $regex: escapeRegex(q), $options: 'i' } }, { 'variants.sku': q }] }),
-      ...(lowStock && { variants: { $elemMatch: { stock: { $lte: LOW_STOCK } } } }),
+      ...(lowStock && { $expr: { $anyElementTrue: { $map: { input: '$variants', as: 'v', in: { $lte: ['$$v.stock', { $ifNull: ['$$v.lowStockAt', 5] }] } } } } }),
     };
     const result = await paginate(Product, filter, { page, limit, sort: { updatedAt: -1 }, populate: { path: 'category', select: 'name slug' } });
     const live = vendor.status === 'active' && vendor.seller?.status === 'approved';
@@ -246,7 +320,7 @@ seller.get(
     res.json({
       ...result,
       items: result.items.map((p) => ({ ...p, shown: live && p.status === 'active' })),
-      counts: Object.fromEntries(['draft', 'active', 'hidden'].map((s) => [s, counts.find((c) => c._id === s)?.count ?? 0])),
+      counts: Object.fromEntries(['draft', 'active', 'hidden', 'blocked'].map((s) => [s, counts.find((c) => c._id === s)?.count ?? 0])),
       listing: { live, sellerStatus: vendor.seller?.status ?? 'none' },
     });
   },
@@ -266,11 +340,17 @@ seller.post('/products', validate({ body: productBody }), async (req, res) => {
   res.status(201).json(await Product.create({ ...(await productFields(req.user._id, req.valid.body)), seller: vendor._id }));
 });
 
+// A blocked product can still be edited, but only Nurvia staff can put it back on sale.
 seller.patch('/products/:id', validate({ body: partialShape(productBody) }), async (req, res) => {
   const vendor = await mySellerProfile(req);
   const product = await Product.findOne({ _id: req.valid.params.id, seller: vendor._id, status: { $ne: 'archived' } });
   if (!product) throw notFound('Product');
-  product.set(await productFields(req.user._id, req.valid.body));
+  const fields = await productFields(req.user._id, req.valid.body, product);
+  if (product.status === 'blocked' && fields.status) {
+    product.blocked.previousStatus = fields.status;
+    delete fields.status;
+  }
+  product.set(fields);
   res.json(await product.save());
 });
 
@@ -289,51 +369,106 @@ seller.delete('/products/:id', validate(), async (req, res) => {
   res.status(204).end();
 });
 
-// Orders holding the seller's items. Each order lists only this seller's lines and their total
-// (`sellerTotalPaise`), so a shared cart never shows another seller's products. Unpaid online orders stay hidden.
-seller.get('/orders', validate({ query: { ...pageQuery, status: z.enum(ORDER_STATUSES).optional(), q: z.string().trim().max(20).optional() } }), async (req, res) => {
-  const vendor = await mySellerProfile(req);
-  const { page, limit, status, q } = req.valid.query;
-  const mine = { 'items.seller': vendor._id, status: { $ne: 'pending_payment' } };
-  const result = await paginate(ShopOrder, { ...mine, ...(status && { status }), ...(q && { code: q.toUpperCase() }) }, { page, limit });
-  const counts = await ShopOrder.aggregate([{ $match: mine }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
-  res.json({
-    ...result,
-    items: result.items.map((o) => {
-      const items = o.items.filter((i) => String(i.seller) === String(vendor._id));
-      return { ...o, items, sellerTotalPaise: items.reduce((sum, i) => sum + i.pricePaise * i.qty, 0) };
-    }),
-    counts: Object.fromEntries(ORDER_STATUSES.filter((s) => s !== 'pending_payment').map((s) => [s, counts.find((c) => c._id === s)?.count ?? 0])),
-  });
+// The seller's view of an order: only its own lines, its part's status (`sellerStatus`), what it
+// can do next, and its total. The customer's phone is shown only while the order is open.
+export function sellerView(order, vendorId) {
+  ensureFulfilments(order);
+  const f = fulfilmentOf(order, vendorId);
+  const items = order.items.filter((i) => String(i.seller) === String(vendorId));
+  const open = !['delivered', 'cancelled'].includes(f.status);
+  const live = items.filter((i) => !i.cancelled);
+  return {
+    _id: order._id,
+    code: order.code,
+    createdAt: order.createdAt,
+    status: f.status,
+    sellerStatus: f.status,
+    orderStatus: order.status,
+    method: f.method,
+    deliveryPaise: f.deliveryPaise,
+    statusHistory: f.statusHistory,
+    deliveredAt: f.deliveredAt,
+    next: nextStatuses(f),
+    canCancel: ['placed', 'confirmed', 'packed'].includes(f.status),
+    items,
+    sellerTotalPaise: live.reduce((sum, i) => sum + i.pricePaise * i.qty, 0),
+    paymentMethod: order.paymentMethod,
+    payment: { status: order.payment.status },
+    customer: order.user?.name ? { name: order.user.name } : undefined,
+    address: { ...order.address, phone: open ? order.address.phone : undefined },
+  };
+}
+
+const sellerFilter = (vendorId, status) => ({
+  fulfilments: { $elemMatch: { seller: vendorId, ...(status ? { status } : { status: { $ne: 'pending_payment' } }) } },
 });
 
-// Fulfilment moves forward one step at a time.
-const NEXT = { placed: 'confirmed', confirmed: 'shipped', shipped: 'delivered' };
+// Orders holding the seller's items, filtered and counted by the seller's own part. Unpaid online
+// orders stay hidden.
+seller.get(
+  '/orders',
+  validate({ query: { ...pageQuery, status: z.enum(ORDER_STATUSES).optional(), q: z.string().trim().max(60).optional(), from: z.coerce.date().optional(), to: z.coerce.date().optional() } }),
+  async (req, res) => {
+    const vendor = await mySellerProfile(req);
+    const { page, limit, status, q, from, to } = req.valid.query;
+    const vendorId = new mongoose.Types.ObjectId(String(vendor._id));
+    const filter = {
+      ...sellerFilter(vendorId, status === 'pending_payment' ? undefined : status),
+      ...((from || to) && { createdAt: { ...(from && { $gte: from }), ...(to && { $lt: to }) } }),
+      ...(q && { $or: [{ code: q.toUpperCase() }, { 'address.name': { $regex: escapeRegex(q), $options: 'i' } }] }),
+    };
+    const result = await paginate(ShopOrder, filter, { page, limit, populate: { path: 'user', select: 'name' } });
+    const counts = await ShopOrder.aggregate([
+      { $match: sellerFilter(vendorId) },
+      { $unwind: '$fulfilments' },
+      { $match: { 'fulfilments.seller': vendorId } },
+      { $group: { _id: '$fulfilments.status', count: { $sum: 1 } } },
+    ]);
+    res.json({
+      ...result,
+      items: result.items.map((o) => sellerView(o, vendor._id)),
+      counts: Object.fromEntries(ORDER_STATUSES.filter((s) => s !== 'pending_payment').map((s) => [s, counts.find((c) => c._id === s)?.count ?? 0])),
+    });
+  },
+);
 
-seller.post('/orders/:id/status', validate({ body: { status: z.enum(['confirmed', 'shipped', 'delivered', 'cancelled']), note: z.string().max(300).optional() } }), async (req, res) => {
-  const vendor = await mySellerProfile(req);
-  const order = await ShopOrder.findOne({ _id: req.valid.params.id, 'items.seller': new mongoose.Types.ObjectId(String(vendor._id)) });
+async function sellerOrder(req, vendor) {
+  const order = await ShopOrder.findOne({ _id: req.valid.params.id, ...sellerFilter(new mongoose.Types.ObjectId(String(vendor._id))) });
   if (!order) throw notFound('Order');
-  const { status, note } = req.valid.body;
-  if (status === 'cancelled') {
-    await cancelOrder(order, { by: req.user._id, reason: note ?? 'Cancelled by seller' });
-  } else {
-    if (NEXT[order.status] !== status) throw conflict(`Cannot move an order from ${order.status} to ${status}`);
-    order.status = status;
-    order.statusHistory.push({ status, by: req.user._id, note });
-    if (status === 'delivered') order.deliveredAt = new Date();
-    if (status === 'delivered' && order.paymentMethod === 'cod') {
-      order.payment.status = 'paid';
-      order.payment.paidAt = new Date();
-    }
-    await order.save();
-    if (status === 'delivered') {
-      await onQualifyingActivity(order.user, { kind: 'order', ref: order._id, amountPaise: order.pricing.totalPaise }).catch((err) => console.error('[loyalty]', err));
-    }
-  }
-  await notify([order.user], { type: `shop.${status}`, title: `Your order ${order.code} is ${status}`, data: { orderId: String(order._id) } });
-  res.json(order);
+  return order;
+}
+
+seller.get('/orders/:id', validate(), async (req, res) => {
+  const vendor = await mySellerProfile(req);
+  const order = await sellerOrder(req, vendor);
+  res.json(sellerView(await order.populate('user', 'name'), vendor._id));
 });
+
+// Moves the seller's part on one step (confirmed, packed, shipped = out for delivery,
+// ready_for_pickup, delivered), or cancels it (all of it, or `skus`) with a reason.
+seller.post(
+  '/orders/:id/status',
+  validate({
+    body: {
+      status: z.enum(['confirmed', 'packed', 'shipped', 'ready_for_pickup', 'delivered', 'cancelled']),
+      note: z.string().trim().max(300).optional(),
+      skus: z.array(z.string().min(1).max(60)).min(1).max(50).optional(),
+    },
+  }),
+  async (req, res) => {
+    const vendor = await mySellerProfile(req);
+    const order = await sellerOrder(req, vendor);
+    const { status, note, skus } = req.valid.body;
+    if (status === 'cancelled') {
+      await cancelLines(order, { seller: vendor._id, skus, by: req.user._id, reason: note ?? 'Cancelled by seller', actor: 'seller' });
+    } else {
+      await advanceFulfilment(order, vendor._id, status, { by: req.user._id, note });
+      const label = { shipped: 'out for delivery', ready_for_pickup: 'ready for pickup' }[status] ?? status;
+      await notify([order.user], { type: `shop.${status}`, title: `Your order ${order.code} is ${label}`, body: vendor.businessName, data: { orderId: String(order._id) } });
+    }
+    res.json(sellerView(await order.populate('user', 'name'), vendor._id));
+  },
+);
 
 // How many customers saved each of the seller's products, most wanted first. Counts only: the
 // seller never sees who saved what.
@@ -361,6 +496,7 @@ seller.get('/wishlist', validate({ query: pageQuery }), async (req, res) => {
   });
 });
 
+seller.use(sellerInventoryRouter);
 seller.use(sellerReturnsRouter);
 seller.use(sellerOnboardingRouter);
 router.use('/seller', seller);

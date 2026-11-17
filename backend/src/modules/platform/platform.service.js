@@ -32,7 +32,8 @@ async function load() {
   if (hit && hit.expires > Date.now()) return hit.value;
   const [config, cities] = await Promise.all([PlatformConfig.findOne({ key: 'platform' }).lean(), City.find().sort({ sortOrder: 1, name: 1 }).lean()]);
   const features = Object.fromEntries(Object.entries(FEATURES).map(([k, f]) => [k, config?.features?.[k] ?? f.default]));
-  const value = { features, cities };
+  const marketplace = { codEnabled: config?.marketplace?.codEnabled ?? true, codMaxOrderPaise: config?.marketplace?.codMaxOrderPaise ?? 500_000 };
+  const value = { features, cities, marketplace };
   cache.set(tenant, { value, expires: Date.now() + CACHE_MS });
   return value;
 }
@@ -61,7 +62,7 @@ export const citySummary = (c, features) => ({
 const norm = (s) => s?.trim().toLowerCase();
 const namesOf = (city) => [city.name, city.slug, ...(city.aliases ?? [])].map(norm);
 
-function distanceKm([lng1, lat1], [lng2, lat2]) {
+export function distanceKm([lng1, lat1], [lng2, lat2]) {
   const rad = Math.PI / 180;
   const a = Math.sin(((lat2 - lat1) * rad) / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(((lng2 - lng1) * rad) / 2) ** 2;
   return 6371 * 2 * Math.asin(Math.sqrt(a));

@@ -76,7 +76,7 @@ describe('listing products', () => {
   it("shows the seller their products, counts and what customers see", async () => {
     const { body } = await owner.http.get('/shop/seller/products').expect(200);
     expect(body.listing).toEqual({ live: true, sellerStatus: 'approved' });
-    expect(body.counts).toEqual({ draft: 1, active: 1, hidden: 0 });
+    expect(body.counts).toEqual({ draft: 1, active: 1, hidden: 0, blocked: 0 });
     expect(Object.fromEntries(body.items.map((p) => [p.slug, p.shown]))).toEqual({ 'salmon-kibble': true, 'puppy-treats': false });
     expect(body.items[0].category).toMatchObject({ slug: 'food' });
 

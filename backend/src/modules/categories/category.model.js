@@ -12,6 +12,8 @@ const categorySchema = new mongoose.Schema(
     icon: String,
     sortOrder: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
+    // Product categories: days after delivery a return can be asked for (unset: the default of 7).
+    returnWindowDays: { type: Number, min: 0, max: 60 },
   },
   { timestamps: true },
 );

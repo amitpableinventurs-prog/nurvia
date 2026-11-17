@@ -33,6 +33,11 @@ const platformConfigSchema = new mongoose.Schema(
   {
     key: { type: String, default: 'platform' },
     features: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // Marketplace payment rules set by staff.
+    marketplace: {
+      codEnabled: { type: Boolean, default: true },
+      codMaxOrderPaise: { type: Number, min: 0, default: 500_000 },
+    },
   },
   { timestamps: true, minimize: false },
 );

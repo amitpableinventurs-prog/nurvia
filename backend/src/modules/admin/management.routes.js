@@ -12,8 +12,8 @@ import { Category } from '../categories/category.model.js';
 import { NfcTag } from '../nfc/nfc.model.js';
 import { notify } from '../notifications/notify.js';
 import { HealthRecord, Pet, Reminder, SPECIES } from '../pets/pet.model.js';
-import { Coupon, ORDER_STATUSES, ShopOrder } from '../shop/shop.model.js';
-import { cancelOrder } from '../shop/shop.service.js';
+import { Coupon, ORDER_STATUSES, Product, ShopOrder } from '../shop/shop.model.js';
+import { cancelLines } from '../shop/shop.service.js';
 import { Service, Vendor } from '../vendors/vendor.model.js';
 
 // Super Admin operations beyond review and moderation: pets, payments, editing vendors and their
@@ -211,13 +211,62 @@ router.get('/shop/orders/:id', requirePermission(P.ORDERS_READ), validate(), asy
   res.json(order);
 });
 
-router.post('/shop/orders/:id/cancel', requirePermission(P.ORDERS_MANAGE), validate({ body: { reason } }), async (req, res) => {
-  const order = await ShopOrder.findById(req.valid.params.id);
-  if (!order) throw notFound('Order');
-  await cancelOrder(order, { by: req.user._id, reason: req.valid.body.reason });
-  await audit(req, 'shop_order.admin_cancel', { type: 'shop_order', id: order._id }, { reason: req.valid.body.reason });
-  await notify([order.user], { type: 'shop.order_cancelled', title: 'Your order was cancelled', body: `${order.code} · ${req.valid.body.reason}`, data: { orderId: String(order._id) } });
-  res.json(order);
+// Cancels the whole order, one seller's part (`seller`) or some lines (`skus`), until it leaves the store.
+router.post(
+  '/shop/orders/:id/cancel',
+  requirePermission(P.ORDERS_MANAGE),
+  validate({ body: { reason, seller: objectId.optional(), skus: z.array(z.string().min(1).max(60)).min(1).max(50).optional() } }),
+  async (req, res) => {
+    const order = await ShopOrder.findById(req.valid.params.id);
+    if (!order) throw notFound('Order');
+    const { seller, skus } = req.valid.body;
+    await cancelLines(order, { by: req.user._id, reason: req.valid.body.reason, seller, skus, actor: 'admin' });
+    await audit(req, 'shop_order.admin_cancel', { type: 'shop_order', id: order._id }, { reason: req.valid.body.reason, meta: { seller, skus } });
+    await notify([order.user], { type: 'shop.order_cancelled', title: order.status === 'cancelled' ? 'Your order was cancelled' : 'Items in your order were cancelled', body: `${order.code} · ${req.valid.body.reason}`, data: { orderId: String(order._id) } });
+    res.json(order);
+  },
+);
+
+// ---- Products: staff takedown ----
+
+router.get(
+  '/shop/products',
+  requirePermission(P.ORDERS_READ),
+  validate({ query: { ...pageQuery, status: z.enum(['draft', 'active', 'hidden', 'blocked']).optional(), seller: objectId.optional(), q: z.string().trim().max(80).optional() } }),
+  async (req, res) => {
+    const { page, limit, status, seller, q } = req.valid.query;
+    const filter = {
+      status: status ?? { $ne: 'archived' },
+      ...(seller && { seller }),
+      ...(q && { $or: [{ name: { $regex: escapeRegex(q), $options: 'i' } }, { brand: { $regex: escapeRegex(q), $options: 'i' } }, { 'variants.sku': q }] }),
+    };
+    res.json(await paginate(Product, filter, { page, limit, sort: { updatedAt: -1 }, select: 'name slug brand status blocked seller category pricePaise mrpPaise inStock images ratingAvg ratingCount updatedAt', populate: [{ path: 'seller', select: 'businessName' }, { path: 'category', select: 'name slug' }] }));
+  },
+);
+
+// Takes a product off sale with a reason the seller sees. Only staff can put it back.
+router.post('/shop/products/:id/block', requirePermission(P.ORDERS_MANAGE), validate({ body: { reason } }), async (req, res) => {
+  const product = await Product.findOne({ _id: req.valid.params.id, status: { $ne: 'archived' } });
+  if (!product) throw notFound('Product');
+  if (product.status === 'blocked') throw conflict('This product is already blocked');
+  product.set({ blocked: { reason: req.valid.body.reason, by: req.user._id, at: new Date(), previousStatus: product.status }, status: 'blocked', featured: false });
+  await product.save();
+  await audit(req, 'product.block', { type: 'product', id: product._id }, { reason: req.valid.body.reason });
+  const vendor = await Vendor.findById(product.seller).select('owner').lean();
+  await notify([vendor?.owner], { type: 'seller.product_blocked', title: `${product.name} was taken down`, body: req.valid.body.reason, data: { productId: String(product._id) } });
+  res.json(product);
+});
+
+router.post('/shop/products/:id/unblock', requirePermission(P.ORDERS_MANAGE), validate({ body: { reason } }), async (req, res) => {
+  const product = await Product.findOne({ _id: req.valid.params.id, status: 'blocked' });
+  if (!product) throw notFound('Blocked product');
+  product.status = product.blocked?.previousStatus ?? 'hidden';
+  product.blocked = undefined;
+  await product.save();
+  await audit(req, 'product.unblock', { type: 'product', id: product._id }, { reason: req.valid.body.reason });
+  const vendor = await Vendor.findById(product.seller).select('owner').lean();
+  await notify([vendor?.owner], { type: 'seller.product_unblocked', title: `${product.name} can be sold again`, body: req.valid.body.reason, data: { productId: String(product._id) } });
+  res.json(product);
 });
 
 // ---- Coupons ----
@@ -236,6 +285,11 @@ const couponBody = {
   active: z.boolean().optional(),
   startsAt: z.coerce.date().nullable().optional(),
   expiresAt: z.coerce.date().nullable().optional(),
+  usageLimit: z.number().int().min(1).nullable().optional(),
+  perCustomerLimit: z.number().int().min(1).nullable().optional(),
+  categories: z.array(objectId).max(50).optional(),
+  sellers: z.array(objectId).max(50).optional(),
+  firstOrderOnly: z.boolean().optional(),
 };
 const checkCoupon = (c) => {
   if (c.type === 'percent' && c.value > 90) throw badRequest('A percentage coupon can be at most 90%');
