@@ -74,11 +74,51 @@ Each provider sits behind an adapter in `backend/src/integrations/`. Switch prov
 | Push | **FCM implemented** (needs `npm i firebase-admin` and a service account). The console adapter is used for dev. | `PUSH_PROVIDER` |
 | Call relay (Explore → Call Store) | **Not masked yet.** The `direct` adapter gives customers the shop's own number. A masking provider (Exotel, Knowlarity) is needed before calls hide both numbers. | `CALL_RELAY_PROVIDER` |
 | File storage | **Local disk.** Swap to S3, GCS or R2 for production. | `UPLOAD_DIR` |
-| AI health summary | **Endpoint and data-minimisation in place; no provider yet.** Returns 503 until Nurvia approves a provider. | `AI_PROVIDER` |
+| AI assistant | **Claude (Anthropic API) implemented, off by default.** Rule-based answers work without it. See [AI assistant](#ai-assistant) for the provider, cost and data flow. | `AI_PROVIDER`, `ANTHROPIC_API_KEY`, `AI_MODEL` |
 | Maps | The API does the geo search itself (MongoDB `2dsphere`). The apps still need a Google Maps key for map display. | — |
 | Address search | **Photon implemented** (OpenStreetMap, free, no key) and **Google** (Places + Geocoding; written to Google's docs, not yet tried with a key). `/geo/search` suggests addresses as the user types, `/geo/places/{placeId}` gives the picked one as address fields plus a map pin, `/geo/reverse` gives the address at a pin. The partner panel's address fields use it; the apps can use the same endpoints. The public Photon server is fair-use only, so production should use Google or a self-hosted Photon. | `GEOCODING_PROVIDER`, `GOOGLE_MAPS_API_KEY`, `PHOTON_URL` |
 | Email | Not wired yet. Email codes and sign-in links use the same OTP adapter. | `MAGIC_LINK_URL` |
 | Google / Apple sign-in | **Implemented** (ID tokens checked against the providers' published keys). Off until client IDs are set. | `GOOGLE_CLIENT_IDS`, `APPLE_CLIENT_IDS` |
+
+## AI assistant
+
+The assistant works mainly from the structured data already in Nurvia (`/api/v1/ai`):
+
+| Feature | Needs a model | Endpoint |
+|---|---|---|
+| A pet's recorded vaccinations, what is overdue or due, recent history | No | `GET /ai/pets/:petId/records` |
+| Community dogs needing care: pending vaccinations, missing feeding updates, unknown sterilisation, missing | No | `GET /ai/community-dogs/insights` |
+| Written health-history summary of a pet | Yes | `POST /ai/pets/:petId/health-summary` |
+| Questions about a pet, a community dog, or all of the user's records | Yes | `POST /ai/ask` |
+| Summary of a prescription or vet document (PDF or photo) | Yes | `POST /ai/documents/summarise` |
+
+`GET /ai/status` tells the apps which features are on and how many requests the user has left today.
+
+**Provider and model.** Anthropic's Claude through the Anthropic API, with the official SDK (`@anthropic-ai/sdk`). The default model is Claude Opus 5.5 (`claude-opus-5-5`); set `AI_MODEL` to change it. If Claude's safety checks decline a request, the API retries it on another Claude model on the server; a request that is still declined returns `422 AI_DECLINED`. `AI_PROVIDER=disabled` (the default) keeps only the rule-based answers. `AI_PROVIDER=mock` returns canned text, for development only.
+
+**What the assistant may say.** Every request carries the same instructions: use only the data sent, say "not recorded" rather than guess, and never diagnose, suggest an illness, or recommend or change medicines or doses. For symptoms or injuries it tells the user to see a vet. Every answer comes with a disclaimer that the assistant is not a veterinarian.
+
+**Privacy and data flow.** App → Nurvia API → Anthropic API → Nurvia API → app. The apps never call Anthropic. Only these fields are sent:
+- **Pets:** name, species, breed, sex, age, weight, neutered, allergies, conditions, and health records (type, title, dates, notes, details).
+- **Community dogs:** name, sex, age, area name, sterilisation, vaccination status, current status, health and behaviour notes, feeding schedule, and recent care-log entries.
+- **Documents:** the one file the user picked.
+
+Never sent: the owner's name, phone, email or address, a dog's map location, care-team members, or other users' data. Anthropic does not train on API data by default and keeps it only for a limited period (see Anthropic's commercial terms and privacy policy). Disclose the assistant in Nurvia's privacy policy before switching it on.
+
+**Keys.** `ANTHROPIC_API_KEY` is read from the server's environment only. It is never stored in the database or sent to an app. Rotate it in the Anthropic Console.
+
+**Caching.** An answer is reused for `AI_CACHE_HOURS` (default 24) when the same user makes the same request on unchanged data. The cache key covers the records, the question, the model, the instructions and today's date, so new data gets a fresh answer. A reused answer comes back at once with `cached: true`, costs nothing and does not count towards the daily limit. Separately, the data block (or document) is marked for Claude's prompt cache, so another question about the same pet or document within about 5 minutes reads it at a lower cost. The `cacheReadTokens` field in `aiusages` shows when that happens.
+
+**Limits and logging.** Each user gets `AI_DAILY_LIMIT` model requests per 24 hours (default 30). Every model request is recorded in the `aiusages` collection: user, feature, model, input and output tokens, and whether it succeeded. Real costs can be worked out from it.
+
+**Expected recurring cost (estimate, to confirm with real usage).** Claude Opus 5.5 costs $4 per million input tokens and $20 per million output tokens.
+
+| Request | Approx. tokens (input / output) | Approx. cost |
+|---|---|---|
+| Health summary or a question | 2,500 / 1,200 | about $0.03 (₹3) |
+| Document summary (2-page PDF) | 6,000 / 1,200 | about $0.05 (₹4) |
+
+1,000 model requests a day is roughly $30–50 a day, or $900–1,500 a month. With `AI_MODEL=claude-haiku-5-5` ($0.10 / $0.50 per million tokens), the same load costs about 40 times less, with simpler summaries. The rule-based answers cost nothing.
 
 ## Decision to confirm with Nurvia: MongoDB vs PostgreSQL
 

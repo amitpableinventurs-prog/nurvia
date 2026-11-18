@@ -4,8 +4,23 @@ import { tenantPlugin } from '../../common/tenancy.js';
 
 const { ObjectId } = mongoose.Schema.Types;
 
-// Roles on a dog's care team. The primary caregiver manages the team.
-export const CARE_ROLES = ['primary', 'co_caregiver', 'feeder', 'medical_volunteer', 'medical_coordinator', 'vet', 'ngo', 'rwa', 'other'];
+// Roles on a dog's care team. The creator starts as the primary caregiver; the primary caregiver and
+// admins manage the team.
+export const CARE_ROLES = ['primary', 'admin', 'co_caregiver', 'feeder', 'volunteer', 'medical_volunteer', 'medical_coordinator', 'vet', 'ngo', 'rwa', 'other'];
+export const CARE_ROLE_LABELS = {
+  primary: 'Admin (primary caregiver)',
+  admin: 'Admin',
+  co_caregiver: 'Caregiver',
+  feeder: 'Feeder',
+  volunteer: 'Volunteer',
+  medical_volunteer: 'Medical volunteer',
+  medical_coordinator: 'Medical coordinator',
+  vet: 'Vet',
+  ngo: 'NGO',
+  rwa: 'RWA',
+  other: 'Other',
+};
+export const MANAGER_ROLES = ['primary', 'admin'];
 // Where the dog is now. Anything other than on_street is also recorded on the care timeline.
 export const DOG_STATUSES = ['on_street', 'missing', 'in_treatment', 'fostered', 'adopted', 'relocated', 'deceased'];
 export const LIFE_STAGES = ['puppy', 'young_adult', 'adult', 'senior'];
@@ -22,6 +37,7 @@ const communityDogSchema = new mongoose.Schema(
   {
     identifier: { type: String }, // short code shown on the profile, e.g. CD-7K2QX
     name: { type: String, trim: true, maxlength: 60 },
+    nickname: { type: String, trim: true, maxlength: 60 }, // what the street calls them ("Kaalu")
     breed: { type: String, trim: true, maxlength: 60 }, // usually Indie / community native
     description: { type: String, maxlength: 2000 },
     sex: { type: String, enum: ['male', 'female', 'unknown'], default: 'unknown' },
@@ -42,7 +58,11 @@ const communityDogSchema = new mongoose.Schema(
     sterilized: { type: Boolean, default: false },
     earNotch: { type: String, enum: EAR_NOTCH, default: 'unknown' },
     feeding: { schedule: { type: String, maxlength: 300 }, tolerances: { type: String, maxlength: 500 } },
-    healthNotes: { type: String, maxlength: 2000 },
+    healthNotes: { type: String, maxlength: 2000 }, // medical history in brief; details are on the care log
+    // Temperament for anyone approaching: "Friendly with children, wary of bikes".
+    behaviour: { type: String, maxlength: 1000 },
+    // The vet who usually treats the dog. Team only.
+    vet: { name: { type: String, maxlength: 120 }, clinic: { type: String, maxlength: 160 }, phone: { type: String, maxlength: 20 } },
     emergencyNotes: { type: String, maxlength: 1000 },
     // A rescue volunteer, NGO or vet nearby (an SOS responder) to call in an emergency, through Nurvia.
     emergencyLiaison: { user: { type: ObjectId, ref: 'User' }, since: Date },

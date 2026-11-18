@@ -115,8 +115,16 @@ export const env = {
     provider: process.env.CALL_RELAY_PROVIDER ?? 'direct',
   },
 
+  // The AI assistant (modules/ai). disabled: only the rule-based answers; anthropic: Claude through
+  // the Anthropic API (server-side key); mock: canned text for development, refused in production.
   ai: {
     provider: process.env.AI_PROVIDER ?? 'disabled',
+    model: process.env.AI_MODEL || 'claude-opus-5-5',
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    // AI requests (summaries, questions, documents) per user per day.
+    dailyLimit: Number(process.env.AI_DAILY_LIMIT ?? 30),
+    // Hours an answer is reused when the same request comes in on unchanged data (0 turns it off).
+    cacheHours: Number(process.env.AI_CACHE_HOURS ?? 24),
   },
 
   // Address search as you type, and the address at a map pin. photon: OpenStreetMap data, no key

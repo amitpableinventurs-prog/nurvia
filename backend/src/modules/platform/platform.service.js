@@ -11,7 +11,7 @@ export const FEATURES = {
   adoption: { label: 'Adoption', phase: 1, default: true },
   communityDogs: { label: 'Community dogs', phase: 1, default: true },
   community: { label: 'Community feed', phase: 1, default: true },
-  ai: { label: 'AI health summary', phase: 1, default: true },
+  ai: { label: 'AI assistant', phase: 1, default: true },
   // Phase 1 ships the SOS / Lost & Found workflows switched off; the full user-facing launch is Phase 2.
   sos: { label: 'SOS / Lost & Found', phase: 2, default: false },
 };

@@ -1,4 +1,4 @@
-import { Activity, CalendarHeart, CreditCard, GalleryHorizontal, LayoutDashboard, MapPinned, Megaphone, ScrollText, Shapes, ShieldCheck, Siren, Store, TicketPercent, Users } from 'lucide-react';
+import { Activity, CalendarHeart, CreditCard, GalleryHorizontal, MessagesSquare, LayoutDashboard, MapPinned, Megaphone, ScrollText, Shapes, ShieldCheck, Siren, Store, TicketPercent, Users } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { NurviaMark } from './icons.jsx';
@@ -13,6 +13,7 @@ const Banners = lazy(() => import('./pages/Banners.jsx'));
 const BookingDetail = lazy(() => import('./pages/BookingDetail.jsx'));
 const Bookings = lazy(() => import('./pages/Bookings.jsx'));
 const Categories = lazy(() => import('./pages/Categories.jsx'));
+const Communities = lazy(() => import('./pages/Communities.jsx'));
 const Coupons = lazy(() => import('./pages/Coupons.jsx'));
 const Customers = lazy(() => import('./pages/Customers.jsx'));
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
@@ -37,6 +38,7 @@ const NAV = [
   { to: '/plans', label: 'Plans & subscriptions', icon: CreditCard, permission: 'plans.manage', element: <Plans /> },
   { section: 'Trust & safety' },
   { to: '/moderation', label: 'Moderation', icon: ShieldCheck, permission: 'content.moderate', element: <Moderation />, count: (d) => d.adoption.awaitingReview, tone: 'warn' },
+  { to: '/communities', label: 'Communities', icon: MessagesSquare, permission: 'content.moderate', element: <Communities /> },
   { to: '/reports', label: 'Safety reports', icon: Siren, permission: 'reports.manage', element: <Reports />, count: (d) => d.reports.open, tone: 'crit' },
   { section: 'Marketing' },
   { to: '/banners', label: 'Banners', icon: GalleryHorizontal, permission: 'marketing.manage', element: <Banners /> },

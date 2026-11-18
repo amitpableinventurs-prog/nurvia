@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate, requireAdminPanel, requirePermission } from '../../common/auth.js';
 import { PERMISSIONS, permissionsFor } from '../../common/roles.js';
 import { adminFinanceRouter, adminSellersRouter } from '../finance/finance.routes.js';
+import { adminCommunitiesRouter } from '../community/community.routes.js';
 import { adminLoyaltyRouter } from '../loyalty/loyalty.routes.js';
 import { adminNfcRouter } from '../nfc/nfc.routes.js';
 import { adminPlansRouter } from '../plans/plan.routes.js';
@@ -35,6 +36,7 @@ router.use('/sos', requirePermission(PERMISSIONS.CONTENT_MODERATE), adminSosRout
 router.use('/sellers', adminSellersRouter);
 router.use('/finance', adminFinanceRouter);
 router.use('/loyalty', adminLoyaltyRouter);
+router.use('/communities', adminCommunitiesRouter);
 router.use('/shop', requirePermission(PERMISSIONS.ORDERS_READ), adminReturnsRouter);
 router.use('/banners', requirePermission(PERMISSIONS.MARKETING_MANAGE), adminBannersRouter);
 router.use('/users', users);

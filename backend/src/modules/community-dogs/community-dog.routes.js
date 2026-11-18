@@ -22,13 +22,17 @@ import {
   EAR_NOTCH,
   LIFE_STAGES,
   LOG_CATEGORIES,
+  CARE_ROLE_LABELS,
+  MANAGER_ROLES,
 } from './community-dog.model.js';
+import { dueCareFor } from './due-care.js';
 
 const router = Router();
 router.use(authenticate);
 
 const dogBody = {
   name: z.string().trim().max(60).optional(),
+  nickname: z.string().trim().max(60).optional(),
   breed: z.string().trim().max(60).optional(),
   description: z.string().max(2000).optional(),
   sex: z.enum(['male', 'female', 'unknown']).optional(),
@@ -49,6 +53,8 @@ const dogBody = {
   earNotch: z.enum(EAR_NOTCH).optional(),
   feeding: z.object({ schedule: z.string().trim().max(300).optional(), tolerances: z.string().trim().max(500).optional() }).optional(),
   healthNotes: z.string().max(2000).optional(),
+  behaviour: z.string().trim().max(1000).optional(),
+  vet: z.object({ name: z.string().trim().max(120).optional(), clinic: z.string().trim().max(160).optional(), phone: z.string().trim().max(20).optional() }).optional(),
   emergencyNotes: z.string().max(1000).optional(),
   // A nearby responder from GET /community-dogs/liaisons; null removes the liaison.
   emergencyLiaisonId: objectId.nullable().optional(),
@@ -93,22 +99,27 @@ function roleOf(dog, user) {
   if (!isCaregiver(dog, user)) return null;
   return String(dog.createdBy?._id ?? dog.createdBy) === String(user._id) ? 'primary' : 'co_caregiver';
 }
-const canManageTeam = (dog, user) => roleOf(dog, user) === 'primary' || isStaff(user);
+const isManager = (dog, user) => MANAGER_ROLES.includes(roleOf(dog, user));
+const canManageTeam = (dog, user) => isManager(dog, user) || isStaff(user);
+// Only the primary caregiver (or staff) can hand over or change the primary role.
+const canTouchPrimary = (dog, user) => roleOf(dog, user) === 'primary' || isStaff(user);
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const randomCode = (n) => Array.from(crypto.randomBytes(n), (b) => ALPHABET[b % ALPHABET.length]).join('');
 const newIdentifier = () => 'CD-' + randomCode(5);
-const SELF_ROLES = ['co_caregiver', 'feeder', 'medical_volunteer', 'other'];
+const SELF_ROLES = ['co_caregiver', 'feeder', 'volunteer', 'medical_volunteer', 'other'];
+// Admins can also invite people straight into these roles.
+const MANAGER_INVITE_ROLES = [...SELF_ROLES, 'admin', 'medical_coordinator', 'vet', 'ngo', 'rwa'];
 const DAY = 86_400_000;
 const LIAISON_KINDS = ['volunteer', 'ngo', 'vet', 'caregiver'];
 const LIAISON_RADIUS_KM = 15;
 
 // For animal safety the public never sees where a dog lives: only the area name. Caregivers see
-// the territory (an approximate centre and the roaming radius); the primary caregiver and staff
-// see the exact pin. Feeding times, resting spots and emergency notes stay within the team.
+// the territory (an approximate centre and the roaming radius); the dog's admins and staff see the
+// exact pin. Feeding times, resting spots, the vet and emergency notes stay within the team.
 function dogView(dog, user) {
   const data = typeof dog.toJSON === 'function' ? dog.toJSON() : { ...dog };
   const role = roleOf(dog, user);
-  const exact = role === 'primary' || isStaff(user);
+  const exact = MANAGER_ROLES.includes(role) || isStaff(user);
   const [lng, lat] = data.location?.coordinates ?? [];
   const round = (v) => Math.round(v * 1000) / 1000; // ~100 m
   const territory = { area: data.area ?? null, city: data.city ?? null };
@@ -117,13 +128,15 @@ function dogView(dog, user) {
     territory.center = lat === undefined ? null : exact ? { lat, lng } : { lat: round(lat), lng: round(lng) };
     territory.exact = exact;
   }
-  const { location, landmarks, feeding, emergencyNotes, ...rest } = data;
+  const { location, landmarks, feeding, emergencyNotes, vet, ...rest } = data;
   return {
     ...rest,
     ...(exact && { location }),
-    ...(role || isStaff(user) ? { landmarks, feeding, emergencyNotes } : { feeding: feeding?.tolerances ? { tolerances: feeding.tolerances } : undefined }),
+    ...(role || isStaff(user) ? { landmarks, feeding, emergencyNotes, vet } : { feeding: feeding?.tolerances ? { tolerances: feeding.tolerances } : undefined }),
     territory,
     myRole: role,
+    myRoleLabel: role ? CARE_ROLE_LABELS[role] : null,
+    canManageTeam: Boolean(role && MANAGER_ROLES.includes(role)) || isStaff(user),
   };
 }
 
@@ -237,34 +250,9 @@ router.delete('/:id/draft', validate(), async (req, res) => {
   res.status(204).end();
 });
 
-// Dogs the caller cares for that need attention, from the care timeline: not fed lately, rabies
-// vaccination or deworming missing or overdue, not sterilised, or marked missing.
+// Dogs the caller cares for that need attention (see due-care.js).
 router.get('/due-care', async (req, res) => {
-  const dogs = await CommunityDog.find({ status: 'visible', caregivers: req.user._id, currentStatus: { $nin: ['adopted', 'deceased', 'relocated'] } })
-    .select('name identifier area sterilized vaccinationStatus currentStatus lastSeen photos')
-    .lean();
-  if (!dogs.length) return res.json([]);
-  const last = await CareLog.aggregate([
-    { $match: { dog: { $in: dogs.map((d) => d._id) }, type: { $in: ['fed', 'vaccinated', 'rabies_vaccination', 'dewormed'] } } },
-    { $group: { _id: { dog: '$dog', type: '$type' }, at: { $max: '$at' } } },
-  ]);
-  const lastAt = (dog, ...types) => Math.max(0, ...last.filter((r) => String(r._id.dog) === String(dog._id) && types.includes(r._id.type)).map((r) => r.at.getTime()));
-  const now = Date.now();
-  const items = dogs
-    .map((dog) => {
-      const due = [];
-      if (dog.currentStatus === 'missing') due.push({ key: 'missing', label: 'Marked missing', since: dog.lastSeen?.at });
-      const fed = lastAt(dog, 'fed');
-      if (now - fed > 2 * DAY) due.push({ key: 'feeding', label: fed ? 'Not fed in over 2 days' : 'No feeding logged yet', lastAt: fed ? new Date(fed) : null });
-      const rabies = lastAt(dog, 'rabies_vaccination', 'vaccinated');
-      if (now - rabies > 365 * DAY) due.push({ key: 'rabies', label: rabies ? 'Rabies vaccination over a year ago' : 'No rabies vaccination recorded', lastAt: rabies ? new Date(rabies) : null });
-      const dewormed = lastAt(dog, 'dewormed');
-      if (now - dewormed > 90 * DAY) due.push({ key: 'deworming', label: dewormed ? 'Deworming over 3 months ago' : 'No deworming recorded', lastAt: dewormed ? new Date(dewormed) : null });
-      if (!dog.sterilized) due.push({ key: 'sterilisation', label: 'Not sterilised' });
-      return { dog, due };
-    })
-    .filter((d) => d.due.length);
-  res.json(items);
+  res.json(await dueCareFor(req.user._id));
 });
 
 // Rescue volunteers, NGOs and vets who opted in as SOS responders near a place: the people a
@@ -374,7 +362,7 @@ async function healthOf(dog) {
   ];
 }
 
-const ROLE_ORDER = ['primary', 'vet', 'ngo', 'medical_coordinator', 'medical_volunteer', 'co_caregiver', 'feeder', 'rwa', 'other'];
+const ROLE_ORDER = ['primary', 'admin', 'vet', 'ngo', 'medical_coordinator', 'medical_volunteer', 'co_caregiver', 'feeder', 'volunteer', 'rwa', 'other'];
 
 async function logCounts(dogId) {
   const rows = await CareLog.aggregate([{ $match: { dog: new mongoose.Types.ObjectId(String(dogId)) } }, { $group: { _id: '$type', n: { $sum: 1 } } }]);
@@ -412,7 +400,7 @@ router.get('/:id', validate(), async (req, res) => {
       communityVerified: dog.verification?.status === 'verified',
     },
     health,
-    team: { total: members.length, members: members.map((m) => ({ user: m.user, role: m.role, title: m.title ?? null, since: m.since })) },
+    team: { total: members.length, members: members.map((m) => ({ user: m.user, role: m.role, roleLabel: CARE_ROLE_LABELS[m.role], title: m.title ?? null, since: m.since })) },
     // Reached through Nurvia ("community relay"); their number is never shown.
     emergencyLiaison: dog.emergencyLiaison?.user
       ? { userId: dog.emergencyLiaison.user._id, name: dog.emergencyLiaison.user.name, kind: liaison?.kind ?? null, organisation: liaison?.organisation ?? null, relayActive: Boolean(liaison?.active) }
@@ -457,14 +445,17 @@ router.delete('/:id/caregivers/me', validate(), async (req, res) => {
   res.status(204).end();
 });
 
-// "+ Invite neighbourhood caregiver": a code any caregiver can share, valid for a week.
-router.post('/:id/invites', validate({ body: { role: z.enum(SELF_ROLES).optional() } }), async (req, res) => {
+// "+ Invite neighbourhood caregiver": a code any caregiver can share, valid for a week. Admins can
+// also invite someone as an admin, medical coordinator, vet, NGO or RWA.
+router.post('/:id/invites', validate({ body: { role: z.enum(MANAGER_INVITE_ROLES).optional() } }), async (req, res) => {
   const dog = await visibleDog(req.valid.params.id);
   if (!isCaregiver(dog, req.user)) throw forbidden('Only caregivers can invite people');
+  const role = req.valid.body.role ?? 'co_caregiver';
+  if (!SELF_ROLES.includes(role) && !canManageTeam(dog, req.user)) throw forbidden('Only the dog\'s admins can invite people into that role');
   const invite = await CareInvite.create({
     dog: dog._id,
     code: randomCode(8),
-    role: req.valid.body.role ?? 'co_caregiver',
+    role,
     createdBy: req.user._id,
     expiresAt: new Date(Date.now() + INVITE_DAYS * DAY),
   });
@@ -486,15 +477,18 @@ router.patch('/:id/care-team/me', validate({ body: { title: z.string().trim().ma
   res.json({ role: member.role, title: member.title ?? null });
 });
 
-// The primary caregiver (or staff) sets roles: vet, NGO, RWA, medical coordinator and so on.
+// The dog's admins (or staff) set roles: admin, vet, NGO, RWA, medical coordinator and so on. Only
+// the primary caregiver can hand the primary role to someone else.
 router.put(
   '/:id/care-team/:userId',
   validate({ params: { userId: objectId }, body: { role: z.enum(CARE_ROLES), title: z.string().trim().max(80).optional() } }),
   async (req, res) => {
     const dog = await visibleDog(req.valid.params.id);
-    if (!canManageTeam(dog, req.user)) throw forbidden('Only the primary caregiver can change roles');
+    if (!canManageTeam(dog, req.user)) throw forbidden('Only the dog\'s admins can change roles');
     const { userId } = req.valid.params;
     const { role, title } = req.valid.body;
+    const target = roleOf(dog, { _id: userId });
+    if ((role === 'primary' || target === 'primary') && !canTouchPrimary(dog, req.user)) throw forbidden('Only the primary caregiver can change the primary role');
     if (!(await User.exists({ _id: userId, status: 'active' }))) throw notFound('User');
     // Bring members from before care-team roles into careTeam before editing it.
     for (const id of dog.caregivers) {
@@ -513,8 +507,9 @@ router.put(
 
 router.delete('/:id/care-team/:userId', validate({ params: { userId: objectId } }), async (req, res) => {
   const dog = await visibleDog(req.valid.params.id);
-  if (!canManageTeam(dog, req.user)) throw forbidden('Only the primary caregiver can remove people');
+  if (!canManageTeam(dog, req.user)) throw forbidden('Only the dog\'s admins can remove people');
   if (req.valid.params.userId === String(req.user._id)) throw badRequest('Use DELETE /caregivers/me to leave');
+  if (roleOf(dog, { _id: req.valid.params.userId }) === 'primary' && !isStaff(req.user)) throw forbidden('The primary caregiver cannot be removed; they can hand the role over first');
   dog.caregivers.pull(req.valid.params.userId);
   dog.careTeam = dog.careTeam.filter((m) => String(m.user) !== req.valid.params.userId);
   await dog.save();
