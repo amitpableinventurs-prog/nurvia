@@ -8,6 +8,29 @@ export const BOOKING_STATUSES = ['pending', 'accepted', 'rejected', 'cancelled',
 export const ACTIVE_STATUSES = ['pending', 'accepted'];
 export const PAYMENT_STATUSES = ['unpaid', 'pending', 'paid', 'failed', 'refund_pending', 'refunded'];
 
+// What the apps and panels show for a booking: its status, except that an active booking whose time
+// was changed shows as rescheduled, and one checked in at the desk as in progress.
+export const BOOKING_STATES = {
+  requested: 'Requested',
+  confirmed: 'Confirmed',
+  rescheduled: 'Rescheduled',
+  in_progress: 'In progress',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+  completed: 'Completed',
+  no_show: 'No-show',
+};
+const STATE_OF_STATUS = { pending: 'requested', accepted: 'confirmed', rejected: 'rejected', cancelled: 'cancelled', completed: 'completed', no_show: 'no_show' };
+export function appointmentState(booking) {
+  if (booking.status === 'accepted' && booking.checkedInAt) return 'in_progress';
+  if (ACTIVE_STATUSES.includes(booking.status) && booking.rescheduled?.open) return 'rescheduled';
+  return STATE_OF_STATUS[booking.status];
+}
+export const stateView = (booking) => {
+  const state = appointmentState(booking);
+  return { state, stateLabel: BOOKING_STATES[state] };
+};
+
 const bookingSchema = new mongoose.Schema(
   {
     code: { type: String, required: true }, // short human-friendly reference shown to both parties
@@ -52,6 +75,9 @@ const bookingSchema = new mongoose.Schema(
     paymentMode: { type: String, enum: ['pay_at_provider', 'online'], default: 'pay_at_provider' },
     checkedInAt: Date, // scanned in at the vendor's desk
     reminderSentAt: Date, // the "your appointment is soon" notification
+    // The latest change of time, shown as "Rescheduled" while `open`: until the vendor accepts, rejects
+    // or cancels it, or the visit is completed or missed. `from` is the time it replaced.
+    rescheduled: { open: Boolean, at: Date, by: { type: String, enum: ['user', 'vendor'] }, from: Date, count: Number },
     payment: {
       status: { type: String, enum: PAYMENT_STATUSES, default: 'unpaid' },
       gateway: String,

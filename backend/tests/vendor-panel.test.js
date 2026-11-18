@@ -72,7 +72,7 @@ describe('vendor panel', () => {
 
   it('gives the sidebar the same badge counts as the dashboard, cheaply', async () => {
     const [dash, badges] = await Promise.all([owner.http.get('/vendors/me/dashboard').expect(200), owner.http.get('/vendors/me/badges').expect(200)]);
-    expect(badges.body).toEqual({ vendor: dash.body.vendor, pending: { count: dash.body.pending.count }, reviews: { unreplied: dash.body.reviews.unreplied }, pause: dash.body.pause });
+    expect(badges.body).toEqual({ vendor: dash.body.vendor, pending: { count: dash.body.pending.count }, reviews: { unreplied: dash.body.reviews.unreplied }, pause: dash.body.pause, plan: { endsInDays: null, expired: false } });
     await customer.http.get('/vendors/me/badges').expect(403);
   });
 

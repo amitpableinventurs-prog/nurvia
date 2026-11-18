@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Badge, ErrorNote, Pager, Table, formatDate, formatRupees, useApi } from '../ui.jsx';
 import { useFilters } from '../useFilters.js';
 
-const STATUSES = ['pending', 'accepted', 'rejected', 'cancelled', 'completed', 'no_show'];
+const STATUSES = ['pending', 'accepted', 'rescheduled', 'rejected', 'cancelled', 'completed', 'no_show'];
 const PAYMENT = ['unpaid', 'pending', 'paid', 'failed', 'refund_pending', 'refunded'];
 
 export default function Bookings() {
@@ -57,7 +57,7 @@ export default function Bookings() {
             { label: 'Vendor', render: (b) => <Link to={`/vendors/${b.vendor?._id}`}>{b.vendor?.businessName}</Link> },
             { label: 'Service', render: (b) => b.serviceSnapshot?.name },
             { label: 'Amount', num: true, render: (b) => formatRupees(b.serviceSnapshot?.pricePaise) },
-            { label: 'Status', render: (b) => <Badge value={b.status} /> },
+            { label: 'Status', render: (b) => <Badge value={b.state ?? b.status} /> },
             { label: 'Payment', render: (b) => <Badge value={b.payment?.status} /> },
           ]}
         />

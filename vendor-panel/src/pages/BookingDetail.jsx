@@ -38,7 +38,7 @@ export default function BookingDetail() {
             {pet.name} · {b.serviceSnapshot?.name}
           </h1>
           <div className="row small" style={{ marginTop: 4 }}>
-            <Badge value={b.status} /> <span className="muted mono">{b.code}</span> <span className="muted">· {formatDate(b.scheduledAt)}</span>
+            <Badge value={b.state ?? b.status} label={b.stateLabel} /> <span className="muted mono">{b.code}</span> <span className="muted">· {formatDate(b.scheduledAt)}</span>
           </div>
         </div>
         <div className="row">
@@ -143,7 +143,7 @@ export default function BookingDetail() {
             columns={[
               { label: 'When', render: (h) => <Link to={`/bookings/${h._id}`}>{formatDay(h.scheduledAt)}</Link> },
               { label: 'Pet & service', render: (h) => `${h.pet?.name} · ${h.serviceSnapshot?.name}` },
-              { label: 'Status', render: (h) => <Badge value={h.status} /> },
+              { label: 'Status', render: (h) => <Badge value={h.action === 'reschedule' ? 'rescheduled' : h.status} /> },
             ]}
           />
         </section>

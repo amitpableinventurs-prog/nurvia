@@ -15,7 +15,7 @@ export default function BookingDetail() {
             ← Bookings
           </Link>
           <h1 className="row">
-            Booking <span className="mono" style={{ fontSize: 18 }}>{b.code}</span> <Badge value={b.status} />
+            Booking <span className="mono" style={{ fontSize: 18 }}>{b.code}</span> <Badge value={b.state ?? b.status} />
           </h1>
         </div>
       </div>
@@ -87,7 +87,7 @@ export default function BookingDetail() {
           columns={[
             { label: 'When', render: (h) => formatDate(h.at) },
             { label: 'Action', render: (h) => h.action?.replace('_', ' ') },
-            { label: 'Status', render: (h) => <Badge value={h.status} /> },
+            { label: 'Status', render: (h) => <Badge value={h.action === 'reschedule' ? 'rescheduled' : h.status} /> },
             { label: 'By', render: (h) => h.by?.name ?? '—' },
             { label: 'Note', render: (h) => h.note ?? '' },
           ]}

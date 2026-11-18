@@ -12,7 +12,7 @@ import { Pet } from '../pets/pet.model.js';
 import { assertModuleAt } from '../platform/platform.service.js';
 import { hasCapacity, isBlocked, nearbySlots, overlapping, staffCommitments, vendorPlace, withinOperatingHours } from '../vendors/availability.js';
 import { Service, Vendor } from '../vendors/vendor.model.js';
-import { ACTIVE_STATUSES, Booking, SlotHold } from './booking.model.js';
+import { ACTIVE_STATUSES, Booking, SlotHold, appointmentState } from './booking.model.js';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode = () => 'NV' + Array.from(crypto.randomBytes(6), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
@@ -311,14 +311,30 @@ const TRANSITIONS = {
 };
 export const BOOKING_ACTIONS = Object.keys(TRANSITIONS);
 
-const MESSAGES = {
-  accept: 'Your booking was confirmed',
-  reject: 'Your booking request was declined',
-  reschedule: 'Your booking was rescheduled',
-  cancel: 'A booking was cancelled',
-  complete: 'Your booking is complete — leave a review',
-  no_show: 'Booking marked as no-show',
-};
+const when = (date) => `${date.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}, ${formatLocalTime(date)}`;
+
+// The status notification each action sends to the other side of the booking.
+function notice(action, actor, booking, reason) {
+  const what = `${booking.serviceSnapshot.name} · ${booking.code}`;
+  const at = when(booking.scheduledAt);
+  const why = reason ? `. Reason: ${reason}` : '';
+  switch (action) {
+    case 'accept':
+      return { title: 'Booking confirmed', body: `${what} on ${at}` };
+    case 'reject':
+      return { title: 'Booking request rejected', body: `${what}${why}` };
+    case 'reschedule':
+      return actor === 'vendor'
+        ? { title: 'Booking rescheduled', body: `${what} moved to ${at}${why}` }
+        : { title: 'Customer rescheduled a booking', body: `${what} moved to ${at}. Accept the new time or suggest another.` };
+    case 'cancel':
+      return actor === 'vendor' ? { title: 'Booking cancelled by the provider', body: `${what}${why}` } : { title: 'Customer cancelled a booking', body: `${what} on ${at}${why}` };
+    case 'complete':
+      return { title: 'Visit completed: leave a review', body: what };
+    default:
+      return { title: 'Booking marked as no-show', body: `${what} on ${at}` };
+  }
+}
 
 export function actorRole(booking, user) {
   if (String(booking.vendorOwner) === String(user._id)) return 'vendor';
@@ -341,6 +357,7 @@ export async function applyAction(booking, user, { action, scheduledAt, reason }
 
   if (action === 'reschedule') {
     if (!scheduledAt) throw badRequest('scheduledAt is required to reschedule');
+    const from = booking.scheduledAt;
     const vendor = await Vendor.findById(booking.vendor).lean();
     await assertSlot(vendor, scheduledAt, booking.serviceSnapshot.durationMin, { excludeId: booking._id, staffId: booking.assignedStaff });
     booking.scheduledAt = scheduledAt;
@@ -348,6 +365,9 @@ export async function applyAction(booking, user, { action, scheduledAt, reason }
     booking.reminderSentAt = undefined;
     // A time the customer picked needs the vendor to confirm it again.
     if (actor === 'user') booking.status = 'pending';
+    booking.rescheduled = { open: true, at: new Date(), by: actor, from, count: (booking.rescheduled?.count ?? 0) + 1 };
+  } else if (booking.rescheduled?.open) {
+    booking.rescheduled.open = false;
   }
   if (rule.to) booking.status = rule.to;
   booking.statusHistory.push({ status: booking.status, action, by: user._id, note: reason ?? (late ? `Cancelled less than ${FREE_CHANGE_HOURS} hours before the visit` : undefined) });
@@ -375,9 +395,8 @@ export async function applyAction(booking, user, { action, scheduledAt, reason }
   const recipient = actor === 'vendor' ? booking.user : booking.vendorOwner;
   await notify([recipient], {
     type: `booking.${action}`,
-    title: MESSAGES[action],
-    body: `${booking.serviceSnapshot.name} · ${booking.code}`,
-    data: { bookingId: String(booking._id) },
+    ...notice(action, actor, booking, reason),
+    data: { bookingId: String(booking._id), status: booking.status, state: appointmentState(booking) },
   });
   return booking;
 }

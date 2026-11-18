@@ -10,7 +10,7 @@ import { notify } from '../notifications/notify.js';
 import { Pet } from '../pets/pet.model.js';
 import { User } from '../users/user.model.js';
 import { Vendor } from '../vendors/vendor.model.js';
-import { ACTIVE_STATUSES, BOOKING_STATUSES, Booking, BookingMessage, SlotHold } from './booking.model.js';
+import { ACTIVE_STATUSES, BOOKING_STATUSES, Booking, BookingMessage, SlotHold, stateView } from './booking.model.js';
 import { BOOKING_ACTIONS, actorRole, applyAction, createBooking, holdSlot, holdView, quoteBooking } from './booking.service.js';
 import { VENDOR_CARD_FIELDS, appointmentCard, appointmentDetails, calendarFile, petSummary, staffProfiles, vendorSummary } from './booking.views.js';
 
@@ -94,7 +94,8 @@ router.get(
     query: {
       ...pageQuery,
       as: z.enum(['user', 'vendor']).default('user'),
-      status: z.enum(BOOKING_STATUSES).optional(),
+      // A stored status, or "rescheduled" for active bookings whose time was changed.
+      status: z.enum([...BOOKING_STATUSES, 'rescheduled']).optional(),
       upcoming: z.enum(['true']).optional(),
       // A local calendar day (YYYY-MM-DD), for day-by-day schedules.
       date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -110,12 +111,13 @@ router.get(
       [as === 'vendor' ? 'vendorOwner' : 'user']: req.user._id,
       ...(as === 'vendor' && customer && { user: customer }),
       ...(pet && { pet }),
-      ...(status && { status }),
+      ...(status && (status === 'rescheduled' ? { status: { $in: ACTIVE_STATUSES }, 'rescheduled.open': true } : { status })),
       ...(upcoming && { scheduledAt: { $gte: new Date() } }),
       ...(date && { scheduledAt: { $gte: dayStart, $lt: new Date(dayStart.getTime() + 86_400_000) } }),
     };
     const populate = as === 'vendor' ? [{ path: 'user', select: 'name phone' }, { path: 'pet', select: 'name species breed' }] : [{ path: 'vendor', select: 'businessName address location' }, { path: 'pet', select: 'name species' }];
-    res.json(await paginate(Booking, filter, { page, limit, sort: { scheduledAt: upcoming || date ? 1 : -1 }, populate }));
+    const result = await paginate(Booking, filter, { page, limit, sort: { scheduledAt: upcoming || date ? 1 : -1 }, populate });
+    res.json({ ...result, items: result.items.map((b) => ({ ...b, ...stateView(b) })) });
   },
 );
 
@@ -188,7 +190,7 @@ router.get('/:id', validate(), async (req, res) => {
     { path: 'pet', select: 'name species breed photo sex dateOfBirth weightKg neutered allergies microchipId' },
     { path: 'statusHistory.by', select: 'name' },
   ]);
-  res.json({ ...booking.toJSON(), customerEmergencyContact: await emergencyContactFor(booking, req.user) });
+  res.json({ ...booking.toJSON(), ...stateView(booking), customerEmergencyContact: await emergencyContactFor(booking, req.user) });
 });
 
 // The confirmation and appointment details screens (the customer's own booking).

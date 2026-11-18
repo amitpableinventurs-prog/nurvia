@@ -42,8 +42,8 @@ export function ErrorNote({ error }) {
 }
 
 const TONES = {
-  good: ['active', 'approved', 'visible', 'open', 'accepted', 'completed', 'paid', 'actioned'],
-  warning: ['pending', 'submitted', 'pending_review', 'on_hold', 'refund_pending', 'shortlisted'],
+  good: ['active', 'approved', 'visible', 'open', 'accepted', 'confirmed', 'completed', 'paid', 'actioned'],
+  warning: ['pending', 'requested', 'rescheduled', 'submitted', 'pending_review', 'on_hold', 'refund_pending', 'shortlisted'],
   serious: ['hidden', 'no_show', 'failed', 'unpaid'],
   critical: ['suspended', 'rejected', 'removed', 'cancelled', 'deleted'],
 };

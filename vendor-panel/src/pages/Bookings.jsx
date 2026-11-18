@@ -9,7 +9,7 @@ const VIEWS = [
   ['day', 'By day'],
   ['all', 'All'],
 ];
-const STATUSES = ['pending', 'accepted', 'completed', 'cancelled', 'rejected', 'no_show'];
+const STATUSES = ['pending', 'accepted', 'rescheduled', 'completed', 'cancelled', 'rejected', 'no_show'];
 
 const shiftDay = (date, days) => new Date(new Date(`${date}T00:00:00Z`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
 const dayLabel = (date) => new Date(`${date}T00:00:00Z`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
@@ -130,7 +130,7 @@ export default function Bookings() {
               label: 'Status',
               render: (b) => (
                 <>
-                  <Badge value={b.status} />
+                  <Badge value={b.state ?? b.status} label={b.stateLabel} />
                   <div className="small muted mono">{b.code}</div>
                 </>
               ),

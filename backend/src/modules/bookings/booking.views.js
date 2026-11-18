@@ -3,11 +3,10 @@
 import mongoose from 'mongoose';
 import { careStatus, careUpToDate, ageMonths } from '../pets/care.js';
 import { openingState } from '../vendors/availability.js';
-import { ACTIVE_STATUSES, Booking } from './booking.model.js';
+import { ACTIVE_STATUSES, BOOKING_STATES, Booking, appointmentState, stateView } from './booking.model.js';
 import { REMINDER_LEAD_MINUTES, careAlerts, changePolicy, checkInToken, passportShare, pricing } from './booking.service.js';
 
-const STATE = { pending: 'requested', accepted: 'confirmed', completed: 'completed', cancelled: 'cancelled', rejected: 'declined', no_show: 'no_show' };
-export const appointmentState = (b) => (b.status === 'accepted' && b.checkedInAt ? 'in_progress' : STATE[b.status]);
+export { appointmentState };
 
 // Straight-line distance in km, rounded to 0.1.
 function distanceKm(from, to) {
@@ -75,7 +74,9 @@ export function appointmentCard(booking, { userLocation, now = new Date() } = {}
     _id: booking._id,
     code: booking.code,
     status: booking.status,
-    state: appointmentState(booking),
+    ...stateView(booking),
+    // Set while the booking shows as rescheduled: when, by whom (user or vendor) and the old time.
+    rescheduled: ACTIVE_STATUSES.includes(booking.status) && booking.rescheduled?.open ? { at: booking.rescheduled.at, by: booking.rescheduled.by, from: booking.rescheduled.from } : null,
     title: [snapshot.name, ...(snapshot.addOns ?? []).map((a) => a.name)].filter(Boolean).join(' + '),
     vendor: vendorSummary(booking.vendor, userLocation),
     pet: petSummary(booking.pet),
@@ -149,6 +150,14 @@ export async function appointmentDetails(booking, { userLocation, now = new Date
   return {
     ...card,
     progress: progress(booking),
+    // Every status change, oldest first: requested, confirmed, rescheduled and so on.
+    history: (booking.statusHistory ?? []).map((h) => ({
+      action: h.action ?? null,
+      stateLabel: h.action === 'reschedule' ? BOOKING_STATES.rescheduled : h.action === 'check_in' ? 'Checked in' : BOOKING_STATES[appointmentState({ status: h.status })] ?? h.status,
+      at: h.at,
+      by: String(h.by) === String(booking.user?._id ?? booking.user) ? 'you' : 'provider',
+      note: h.note ?? null,
+    })),
     // Shown as a QR code ("Express pass") for the vendor's desk to scan.
     checkIn: {
       code: checkInToken(booking._id),

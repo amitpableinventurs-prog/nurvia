@@ -237,6 +237,27 @@ describe('My Appointments and appointment details', () => {
     expect(new Date(body.endsAt) - new Date(body.scheduledAt)).toBe(105 * 60_000);
   });
 
+  it('shows a rescheduled booking as Rescheduled until the studio answers, and notifies each side', async () => {
+    const card = (await parent.http.get('/bookings/appointments').expect(200)).body.items.find((b) => b._id === later._id);
+    expect(card).toMatchObject({ state: 'rescheduled', stateLabel: 'Rescheduled', rescheduled: { by: 'user', from: later.scheduledAt } });
+    const forVendor = await tenantRun(() => Notification.findOne({ user: owner.user._id, type: 'booking.reschedule' }).lean());
+    expect(forVendor.title).toBe('Customer rescheduled a booking');
+    const listed = (await owner.http.get('/bookings?as=vendor&status=rescheduled').expect(200)).body;
+    expect(listed.items.map((b) => [b._id, b.stateLabel])).toEqual([[later._id, 'Rescheduled']]);
+
+    await owner.http.post(`/bookings/${later._id}/actions`).send({ action: 'accept' }).expect(200);
+    const details = (await parent.http.get(`/bookings/${later._id}/details`).expect(200)).body;
+    expect(details).toMatchObject({ state: 'confirmed', stateLabel: 'Confirmed', rescheduled: null });
+    expect(details.history.map((h) => [h.stateLabel, h.by])).toEqual([
+      ['Requested', 'you'],
+      ['Confirmed', 'provider'],
+      ['Rescheduled', 'you'],
+      ['Confirmed', 'provider'],
+    ]);
+    const forParent = await tenantRun(() => Notification.find({ user: parent.user._id, type: 'booking.accept' }).sort({ _id: -1 }).lean());
+    expect(forParent[0]).toMatchObject({ title: 'Booking confirmed', data: { state: 'confirmed' } });
+  });
+
   it('opens the passport and check-in close to the visit, and reminds the customer', async () => {
     await owner.http.get(`/vendors/me/bookings/${booking._id}/passport`).expect(403);
     await moveTo(booking._id, HOUR);
