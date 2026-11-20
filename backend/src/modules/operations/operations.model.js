@@ -27,6 +27,26 @@ export const ROLE_CAPABILITIES = {
   other: ['calendar.read'],
 };
 
+// Reminder settings a business starts with (PUT /vendors/me/reminder-settings).
+export const REMINDER_DEFAULTS = { customerHours: [24], staffMinutes: 60, followUps: true };
+
+export const CAPABILITY_LABELS = {
+  'calendar.read': 'See the calendar',
+  'bookings.manage': 'Book, move and cancel appointments',
+  'customers.read': 'See customers, notes and documents',
+  'customers.manage': 'Add and edit customers',
+  'services.manage': 'Edit services and packages',
+  'visits.write': 'Write visit records',
+  'reports.read': 'See reports and the plan',
+  'staff.manage': 'Manage staff and reminders',
+};
+
+// A staff member's permissions: their role's, plus any added, minus any taken away.
+export function capabilitiesOf(staff) {
+  const revoked = new Set(staff.revokedCapabilities ?? []);
+  return [...new Set([...(ROLE_CAPABILITIES[staff.role] ?? []), ...(staff.extraCapabilities ?? [])])].filter((c) => !revoked.has(c));
+}
+
 const staffSchema = new mongoose.Schema(
   {
     vendor: { type: ObjectId, ref: 'Vendor', required: true },
@@ -37,6 +57,8 @@ const staffSchema = new mongoose.Schema(
     role: { type: String, enum: STAFF_ROLES, required: true },
     // Extra capabilities on top of the role, e.g. a groomer who also manages bookings.
     extraCapabilities: [{ type: String, enum: CAPABILITIES }],
+    // Capabilities of the role this person should not have, e.g. a receptionist who may not edit customers.
+    revokedCapabilities: [{ type: String, enum: CAPABILITIES }],
     color: { type: String, match: /^#[0-9a-f]{6}$/i }, // calendar colour
     // Shown to customers choosing who looks after their pet, e.g. "Master Canine Stylist", 6 years.
     title: { type: String, trim: true, maxlength: 60 },
@@ -75,6 +97,18 @@ const customerSchema = new mongoose.Schema(
     pets: [customerPetSchema],
     tags: [{ type: String, lowercase: true, maxlength: 40 }],
     notes: { type: String, maxlength: 2000 },
+    // Consent forms, old prescriptions, vaccination cards brought in on paper.
+    documents: [
+      {
+        file: { type: ObjectId, ref: 'File', required: true },
+        title: { type: String, required: true, trim: true, maxlength: 120 },
+        name: String,
+        mime: String,
+        petId: ObjectId,
+        uploadedBy: { type: ObjectId, ref: 'User' },
+        at: { type: Date, default: Date.now },
+      },
+    ],
     visitCount: { type: Number, default: 0 },
     lastVisitAt: Date,
     archivedAt: Date,
@@ -95,6 +129,7 @@ const noteSchema = new mongoose.Schema(
     text: { type: String, required: true, maxlength: 2000 },
     followUpAt: Date,
     doneAt: Date,
+    remindedAt: Date, // the follow-up reminder was sent
   },
   { timestamps: true },
 );
@@ -126,6 +161,8 @@ const appointmentSchema = new mongoose.Schema(
     customerPackage: { type: ObjectId, ref: 'CustomerPackage' },
     paidOffline: { type: Boolean, default: false },
     notes: { type: String, maxlength: 1000 },
+    // Reminders already sent for this time, e.g. "customer:24", "staff:60". Cleared when it moves.
+    remindersSent: [String],
     createdBy: { type: ObjectId, ref: 'User', required: true },
   },
   { timestamps: true },

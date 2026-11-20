@@ -43,6 +43,14 @@ const vendorSchema = new mongoose.Schema(
     homeVisits: { type: Boolean, default: false },
     // Shown to customers on their booking, e.g. "Please arrive 10 minutes early with your pet on a leash".
     arrivalInstructions: { type: String, trim: true, maxlength: 300 },
+    // Reminders for the business's own appointments and CRM follow-ups (operations/reminders.js).
+    reminderSettings: {
+      // Hours before an appointment to remind a customer who has the Nurvia app.
+      customerHours: { type: [Number], default: undefined },
+      // Minutes before an appointment to remind the staff member doing it (0: off).
+      staffMinutes: Number,
+      followUps: Boolean, // tell the note's author when a follow-up is due
+    },
     // A shop or pharmacy in the Explore directory (Local Pet Shops). Listed while `type` is set.
     store: {
       type: { type: String, enum: STORE_TYPES },

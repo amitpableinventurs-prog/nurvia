@@ -28,7 +28,7 @@ const FEW_RESULTS = 5;
 const MAX_CANDIDATES = 500;
 
 // Time-off reasons and pause notes are for the vendor; customers only see the free slots.
-const PUBLIC_FIELDS = '-kyc -seller -subscription -statusReason -owner -timeOff -pause.reason';
+const PUBLIC_FIELDS = '-kyc -seller -subscription -reminderSettings -statusReason -owner -timeOff -pause.reason';
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM (24-hour)');
 
 const vendorBody = {
@@ -328,7 +328,7 @@ router.get(
         : { $match: filter },
       { $limit: MAX_CANDIDATES },
       { $addFields: { verified: { $eq: ['$kyc.licenseCheck.status', 'verified'] } } },
-      { $project: { kyc: 0, seller: 0, subscription: 0, statusReason: 0, owner: 0, 'pause.reason': 0, 'timeOff.reason': 0 } },
+      { $project: { kyc: 0, seller: 0, subscription: 0, reminderSettings: 0, statusReason: 0, owner: 0, 'pause.reason': 0, 'timeOff.reason': 0 } },
     ]);
     const prices = await Service.aggregate([
       { $match: { vendor: { $in: candidates.map((v) => v._id) }, active: true } },

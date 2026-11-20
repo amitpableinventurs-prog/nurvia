@@ -2,7 +2,7 @@ import { authenticate } from '../../common/auth.js';
 import { forbidden, notFound } from '../../common/errors.js';
 import { ROLES } from '../../common/roles.js';
 import { Vendor } from '../vendors/vendor.model.js';
-import { CAPABILITIES, ROLE_CAPABILITIES, VendorCustomer, VendorStaff } from './operations.model.js';
+import { CAPABILITIES, VendorCustomer, VendorStaff, capabilitiesOf } from './operations.model.js';
 
 // Resolves the vendor workspace for the signed-in user: the business they own, or the one they work
 // at as active staff. Sets req.vendor, req.staff (null for the owner) and req.capabilities.
@@ -19,7 +19,7 @@ async function resolveWorkspace(req, _res, next) {
   if (!vendor) throw notFound('Vendor workspace');
   req.vendor = vendor;
   req.staff = staff;
-  req.capabilities = new Set([...(ROLE_CAPABILITIES[staff.role] ?? []), ...(staff.extraCapabilities ?? [])]);
+  req.capabilities = new Set(capabilitiesOf(staff));
   next();
 }
 

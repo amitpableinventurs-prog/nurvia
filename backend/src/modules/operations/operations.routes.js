@@ -21,7 +21,9 @@ import {
   APPOINTMENT_STATUSES,
   Appointment,
   CAPABILITIES,
+  CAPABILITY_LABELS,
   CUSTOMER_SOURCES,
+  REMINDER_DEFAULTS,
   CrmNote,
   CustomerPackage,
   ROLE_CAPABILITIES,
@@ -33,14 +35,18 @@ import {
   VendorStaff,
   VisitReport,
   WaitlistEntry,
+  capabilitiesOf,
 } from './operations.model.js';
+import { File } from '../files/file.model.js';
+import { privatePath } from '../../integrations/storage.js';
+import { Review } from '../reviews/review.model.js';
 import { assertWithinPlan, requirePlanFeature } from '../plans/plan.routes.js';
 import { recordVisit, requireCapability, vendorWorkspace } from './operations.service.js';
 
 // The vendor's business workspace (Phase 2 vendor SaaS), mounted at /vendors/me. The business owner
 // and active staff members both use it; each route checks the caller's role capability.
 const router = Router();
-const PATHS = ['/workspace', '/staff', '/customers', '/notes', '/follow-ups', '/appointments', '/calendar', '/waitlist', '/packages', '/visits', '/reports', '/bookings'];
+const PATHS = ['/workspace', '/staff', '/customers', '/notes', '/follow-ups', '/appointments', '/calendar', '/waitlist', '/packages', '/visits', '/reports', '/bookings', '/reminder-settings'];
 router.use(PATHS, ...vendorWorkspace);
 
 // Plan features (plans/plan.model.js). Without one, what the business already has stays readable,
@@ -89,6 +95,8 @@ const staffBody = {
   email: z.string().email().optional(),
   role: z.enum(STAFF_ROLES.filter((r) => r !== 'owner')),
   extraCapabilities: z.array(z.enum(CAPABILITIES)).max(CAPABILITIES.length).optional(),
+  // Take away permissions the role would normally have.
+  revokedCapabilities: z.array(z.enum(CAPABILITIES)).max(CAPABILITIES.length).optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
   title: z.string().trim().max(60).optional(),
   experienceYears: z.number().int().min(0).max(60).optional(),
@@ -97,7 +105,15 @@ const staffBody = {
 
 router.get('/staff', can('calendar.read'), async (req, res) => {
   const staff = await VendorStaff.find({ vendor: req.vendor._id }).sort({ active: -1, name: 1 }).lean();
-  res.json(staff.map((s) => ({ ...s, capabilities: [...new Set([...(ROLE_CAPABILITIES[s.role] ?? []), ...(s.extraCapabilities ?? [])])] })));
+  res.json(staff.map((s) => ({ ...s, capabilities: capabilitiesOf(s) })));
+});
+
+// The roles staff can have and what each can do by default, for the staff form.
+router.get('/staff/roles', can('calendar.read'), (_req, res) => {
+  res.json({
+    roles: STAFF_ROLES.filter((r) => r !== 'owner').map((role) => ({ role, capabilities: ROLE_CAPABILITIES[role] ?? [] })),
+    capabilities: CAPABILITIES.map((key) => ({ key, label: CAPABILITY_LABELS[key] })),
+  });
 });
 
 // Staff sign in with their own mobile number. Adding someone creates their Nurvia account if needed.
@@ -243,6 +259,74 @@ router.patch(
   },
 );
 
+// ---- Customer documents (consent forms, old prescriptions, paper vaccination cards) ----
+
+// Upload the file first with POST /files, purpose "crm_document".
+router.post(
+  '/customers/:id/documents',
+  can('customers.manage'),
+  requirePlanFeature('crm'),
+  validate({ body: { fileId: objectId, title: z.string().trim().min(1).max(120), petId: objectId.optional() } }),
+  async (req, res) => {
+    const customer = await own(VendorCustomer, req.valid.params.id, req, 'Customer');
+    const { fileId, title, petId } = req.valid.body;
+    if (petId && !customer.pets.id(petId)) throw badRequest('That pet is not on this customer record');
+    const file = await File.findOne({ _id: fileId, owner: req.user._id, purpose: 'crm_document' }).lean();
+    if (!file) throw badRequest('Upload the file with purpose crm_document first');
+    if (customer.documents.length >= 50) throw badRequest('A customer can have at most 50 documents');
+    customer.documents.push({ file: file._id, title, name: file.originalName, mime: file.mime, petId, uploadedBy: req.user._id });
+    await customer.save();
+    res.status(201).json(customer.documents.at(-1));
+  },
+);
+
+// Anyone at the business who can see customers can open their documents.
+router.get('/customers/:id/documents/:docId', can('customers.read'), validate({ params: { docId: objectId } }), async (req, res) => {
+  const customer = await own(VendorCustomer, req.valid.params.id, req, 'Customer');
+  const doc = customer.documents.id(req.valid.params.docId);
+  if (!doc) throw notFound('Document');
+  const file = await File.findById(doc.file).lean();
+  if (!file) throw notFound('Document');
+  res.set('Cache-Control', 'private, no-store');
+  res.type(file.mime).sendFile(privatePath(file.key));
+});
+
+router.delete('/customers/:id/documents/:docId', can('customers.manage'), validate({ params: { docId: objectId } }), async (req, res) => {
+  const customer = await own(VendorCustomer, req.valid.params.id, req, 'Customer');
+  const doc = customer.documents.id(req.valid.params.docId);
+  if (!doc) throw notFound('Document');
+  doc.deleteOne();
+  await customer.save();
+  res.status(204).end();
+});
+
+// ---- Reminders for the business's own appointments and follow-ups (operations/reminders.js) ----
+
+const reminderSettingsOf = (vendor) => ({ ...REMINDER_DEFAULTS, ...Object.fromEntries(Object.entries(vendor.reminderSettings ?? {}).filter(([, v]) => v !== undefined && v !== null)) });
+
+router.get('/reminder-settings', can('calendar.read'), (req, res) => {
+  res.json(reminderSettingsOf(req.vendor));
+});
+
+router.put(
+  '/reminder-settings',
+  can('staff.manage'),
+  validate({
+    body: {
+      // Up to three reminders, 1 to 72 hours before.
+      customerHours: z.array(z.number().int().min(1).max(72)).max(3).optional(),
+      staffMinutes: z.number().int().min(0).max(24 * 60).optional(),
+      followUps: z.boolean().optional(),
+    },
+  }),
+  async (req, res) => {
+    const body = { ...req.valid.body, ...(req.valid.body.customerHours && { customerHours: [...new Set(req.valid.body.customerHours)].sort((a, b) => b - a) }) };
+    const set = Object.fromEntries(Object.entries(body).map(([k, v]) => [`reminderSettings.${k}`, v]));
+    const vendor = await Vendor.findOneAndUpdate({ _id: req.vendor._id }, { $set: set }, { new: true }).lean();
+    res.json(reminderSettingsOf(vendor));
+  },
+);
+
 // ---- Notes and follow-ups ----
 
 const noteBody = { text: z.string().trim().min(1).max(2000), petId: objectId.optional(), followUpAt: z.coerce.date().optional() };
@@ -260,6 +344,8 @@ router.patch(
     const note = await own(CrmNote, req.valid.params.id, req, 'Note');
     const { done, ...fields } = req.valid.body;
     note.set(fields);
+    // A new follow-up date gets its own reminder.
+    if (fields.followUpAt) note.remindedAt = undefined;
     if (done !== undefined) note.doneAt = done ? new Date() : undefined;
     res.json(await note.save());
   },
@@ -388,7 +474,8 @@ router.patch(
     const minutes = durationMin ?? (appointment.endsAt - appointment.scheduledAt) / 60_000;
     const staff = staffId === undefined ? appointment.staff : staffId === null ? undefined : await activeStaff(req, staffId);
     await assertStaffFree(req, staff, start, addMinutes(start, minutes), appointment._id);
-    appointment.set({ ...fields, scheduledAt: start, endsAt: addMinutes(start, minutes), staff: staff ?? null });
+    const moved = start.getTime() !== appointment.scheduledAt.getTime();
+    appointment.set({ ...fields, scheduledAt: start, endsAt: addMinutes(start, minutes), staff: staff ?? null, ...(moved && { remindersSent: [] }) });
     res.json(await appointment.save());
   },
 );
@@ -934,6 +1021,34 @@ async function visitRows(vendorId, from, to) {
 
 const pct = (part, whole) => (whole ? Math.round((part / whole) * 1000) / 10 : 0);
 
+// Reviews written in the period: how many, the average, the spread of stars and how many got a reply.
+async function reviewStats(vendor, from, to) {
+  const rows = await Review.aggregate([
+    { $match: { vendor, status: 'visible', createdAt: { $gte: from, $lt: to } } },
+    { $group: { _id: '$rating', count: { $sum: 1 }, replied: { $sum: { $cond: [{ $ifNull: ['$vendorReply.text', false] }, 1, 0] } } } },
+  ]);
+  const count = rows.reduce((s, r) => s + r.count, 0);
+  const stars = rows.reduce((s, r) => s + r._id * r.count, 0);
+  return {
+    count,
+    ratingAvg: count ? Math.round((stars / count) * 10) / 10 : null,
+    byRating: Object.fromEntries([5, 4, 3, 2, 1].map((n) => [n, rows.find((r) => r._id === n)?.count ?? 0])),
+    repliedPct: pct(rows.reduce((s, r) => s + r.replied, 0), count),
+  };
+}
+
+// The customer keys (as in visitRows) that had a completed visit before `from`.
+async function returningKeys(vendor, from, rows) {
+  if (!rows.length) return new Set();
+  const users = rows.filter((r) => r.customerKey.startsWith('u:')).map((r) => r.customerKey.slice(2));
+  const [bookedBefore, apptBefore] = await Promise.all([
+    Booking.distinct('user', { vendor, status: 'completed', scheduledAt: { $lt: from } }),
+    Appointment.distinct('customer', { vendor, status: 'completed', scheduledAt: { $lt: from } }),
+  ]);
+  const linked = await VendorCustomer.find({ _id: { $in: apptBefore }, user: { $in: users } }).select('user').lean();
+  return new Set([...bookedBefore.map((u) => `u:${u}`), ...linked.map((c) => `u:${c.user}`), ...apptBefore.map((c) => `c:${c}`)]);
+}
+
 // Bookings, revenue, top services, repeat customers and no-shows from the rows above.
 function reportInsights(rows, packagesPaise) {
   const completed = rows.filter((r) => r.status === 'completed');
@@ -946,7 +1061,7 @@ function reportInsights(rows, packagesPaise) {
     s.valuePaise += r.valuePaise;
     s[r.source]++;
     services.set(r.service, s);
-    const c = customers.get(r.customerKey) ?? { name: r.customer, phone: r.phone, visits: 0, valuePaise: 0, firstAt: r.at, lastAt: r.at };
+    const c = customers.get(r.customerKey) ?? { key: r.customerKey, name: r.customer, phone: r.phone, visits: 0, valuePaise: 0, firstAt: r.at, lastAt: r.at };
     c.visits++;
     c.valuePaise += r.valuePaise;
     c.lastAt = r.at;
@@ -1004,6 +1119,8 @@ router.get('/reports', can('reports.read'), validate({ query: dateRange }), asyn
   ]);
   const { rows, truncated } = await visitRows(vendor, from, to);
   const insight = reportInsights(rows, packageSales[0]?.paise ?? 0);
+  const [reviews, returning] = await Promise.all([reviewStats(vendor, from, to), returningKeys(vendor, from, insight.customers.length ? rows : [])]);
+  const returningCount = insight.customers.filter((c) => returning.has(c.key)).length;
   const toMap = (rows) => Object.fromEntries(rows.map((r) => [r._id, r.count]));
   res.json({
     from,
@@ -1016,7 +1133,16 @@ router.get('/reports', can('reports.read'), validate({ query: dateRange }), asyn
     summary: insight.summary,
     revenue: insight.revenue,
     topServices: insight.services.slice(0, 10),
-    customers: { unique: insight.customers.length, repeat: insight.repeat.length, repeatPct: insight.rates.repeatPct, topRepeat: insight.repeat.slice(0, 10) },
+    customers: {
+      unique: insight.customers.length,
+      repeat: insight.repeat.length,
+      repeatPct: insight.rates.repeatPct,
+      // Came before this period too, or for the first time in it.
+      returning: returningCount,
+      new: insight.customers.length - returningCount,
+      topRepeat: insight.repeat.slice(0, 10).map(({ key, ...c }) => c),
+    },
+    reviews,
     noShows: {
       count: insight.noShows.length,
       ratePct: insight.rates.noShowPct,

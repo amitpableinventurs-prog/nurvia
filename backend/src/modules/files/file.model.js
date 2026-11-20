@@ -6,7 +6,7 @@ const fileSchema = new mongoose.Schema(
     owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     purpose: {
       type: String,
-      enum: ['pet_photo', 'health_record', 'vendor_kyc', 'vendor_photo', 'community', 'adoption', 'avatar', 'visit_report', 'sos', 'seller_kyc', 'banner'],
+      enum: ['pet_photo', 'health_record', 'vendor_kyc', 'vendor_photo', 'community', 'adoption', 'avatar', 'visit_report', 'sos', 'seller_kyc', 'banner', 'crm_document'],
       required: true,
     },
     visibility: { type: String, enum: ['public', 'private'], required: true },

@@ -15,8 +15,9 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: env.uploads.maxBytes, files: 1 } });
 
 // Health records and KYC documents are personal data, so they are never publicly addressable.
-const PRIVATE_PURPOSES = new Set(['health_record', 'vendor_kyc', 'seller_kyc']);
-const PDF_PURPOSES = new Set(['health_record', 'vendor_kyc', 'seller_kyc', 'visit_report']);
+// crm_document: a file a business keeps on a customer, opened through /vendors/me/customers/:id/documents.
+const PRIVATE_PURPOSES = new Set(['health_record', 'vendor_kyc', 'seller_kyc', 'crm_document']);
+const PDF_PURPOSES = new Set(['health_record', 'vendor_kyc', 'seller_kyc', 'visit_report', 'crm_document']);
 
 // The client-declared content type is not trusted; the type is taken from the file's magic bytes.
 export function sniff(buffer) {
